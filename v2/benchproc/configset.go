@@ -1,0 +1,144 @@
+// Copyright 2020 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package benchproc
+
+// A Config is either a key/value pair or a tuple of Configs.
+//
+// A Config is immutable and is constructed via a ConfigSet, which
+// ensures arbitrarily complex Configs (from the same ConfigSet) can
+// be compared using just pointer equality.
+//
+// Nesting of Config tuples allows constructing complex
+// configurations. And tuple Configs can be efficiently extended to
+// form new Configs.
+type Config struct {
+	configKV
+	configTuple
+
+	// For a tuple config, the total length of the tuple
+	// terminating in this Config.
+	tupleLen int
+}
+
+type configKV struct {
+	key, val string
+}
+
+type configTuple struct {
+	// A tuple config is represented as a chain of pairs, where
+	// each pair adds an element to the end. This is like a
+	// reversed singly-linked list.
+
+	// pred is nil or a tuple config for all but the last element.
+	pred *Config
+	// elt is the last element in this tuple.
+	elt *Config
+}
+
+// IsKeyVal returns whether c is a key/value Config.
+func (c *Config) IsKeyVal() bool {
+	return c != nil && c.elt == nil
+}
+
+// KeyVal returns the key and value of a key/value Config.
+func (c *Config) KeyVal() (key, val string) {
+	if !c.IsKeyVal() {
+		return "", ""
+	}
+	return c.key, c.val
+}
+
+// Tuple returns the elements of a tuple Config.
+func (c *Config) Tuple() []*Config {
+	if c == nil {
+		return []*Config{}
+	} else if c.IsKeyVal() {
+		return nil
+	}
+	// Collect the elements.
+	out := make([]*Config, c.tupleLen)
+	for i := len(out) - 1; i >= 0; i-- {
+		out[i] = c.elt
+		c = c.pred
+	}
+	return out
+}
+
+// A ConfigSet is a collection of Configs. Configs within a single
+// ConfigSet can be compared for equality using pointer comparison.
+type ConfigSet struct {
+	kvs    map[configKV]*Config
+	tuples map[configTuple]*Config
+}
+
+// KeyValue constructs a key/value Config.
+func (s *ConfigSet) KeyValue(key, val string) *Config {
+	if s.kvs == nil {
+		s.kvs = make(map[configKV]*Config)
+	}
+	kv := configKV{key, val}
+	c := s.kvs[kv]
+	if c == nil {
+		c = &Config{configKV: kv}
+		s.kvs[kv] = c
+	}
+	return c
+}
+
+// KeyValueBytes is like KeyValue, but operates on byte slices. This
+// can avoid allocation in some cases.
+func (s *ConfigSet) KeyValueBytes(key, val []byte) *Config {
+	if s.kvs == nil {
+		s.kvs = make(map[configKV]*Config)
+	}
+	// The compiler will optimize away this string conversion, but
+	// (as of 1.13) only if it's literally in the map index.
+	c := s.kvs[configKV{string(key), string(val)}]
+	if c == nil {
+		// TODO: Intern the strings?
+		kv := configKV{string(key), string(val)}
+		c = &Config{configKV: kv}
+		s.kvs[kv] = c
+	}
+	return c
+}
+
+// Tuples constructs a tuple Config.
+func (s *ConfigSet) Tuple(elts ...*Config) *Config {
+	return s.Append(nil, elts...)
+}
+
+// Append constructs a tuple Config that appends elts to the end of
+// base.
+func (s *ConfigSet) Append(base *Config, elts ...*Config) *Config {
+	if s.tuples == nil {
+		s.tuples = make(map[configTuple]*Config)
+	}
+
+	baseLen := 0
+	if base != nil {
+		baseLen = base.tupleLen
+	}
+	pred := base
+	found := true
+	for i, elt := range elts {
+		key := configTuple{pred, elt}
+		if found {
+			// Everything up to this point has been
+			// interned, so this might be, too.
+			if c := s.tuples[key]; c != nil {
+				pred = c
+				continue
+			}
+			// Not interned, so no remaining pairs will be
+			// either.
+			found = false
+		}
+		c := &Config{configTuple: key, tupleLen: baseLen + i + 1}
+		s.tuples[key] = c
+		pred = c
+	}
+	return pred
+}
