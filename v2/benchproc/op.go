@@ -6,105 +6,85 @@ package benchproc
 
 import "golang.org/x/perf/v2/benchfmt"
 
-// A Grouper is an Operator that produces a *Grouped, which groups
-// results by distinct values of a Projection.
-type Grouper struct {
-	project Projection
-	next    Operator
+// A GroupBy is a Processor that sub-divides results by different
+// values of a Projection.
+type GroupBy struct {
+	pipeline *Pipeline
+	project  Projection
+	next     Processor
 }
 
-// A Grouped is a Processor that collects results grouped by distinct
-// values of a Projection.
-type Grouped struct {
-	Groups map[*Config]Processor
+var _ Processor = (*GroupBy)(nil)
+
+func NewGroupBy(pipeline *Pipeline, project Projection, next Processor) *GroupBy {
+	return &GroupBy{pipeline, project, next}
+}
+
+func (g *GroupBy) Process(result *benchfmt.Result, groupKey *Config) {
+	groupKey2 := g.pipeline.ConfigSet.Append(groupKey, g.pipeline.Project(result, g.project))
+	g.next.Process(result, groupKey2)
+}
+
+// XXX CollectConfigs? To parallel CollectValues.
+
+// A Tracker is a leaf Processor that collects the unique values of a
+// Projection in order of first observation.
+type Tracker struct {
+	Tracked map[*Config]*Tracked
 
 	pipeline *Pipeline
-	op       Grouper
+	project  Projection
 }
 
-var _ Operator = (*Grouper)(nil)
+var _ Processor = (*Tracker)(nil)
 
-func NewGrouper(p Projection, next Operator) *Grouper {
-	return &Grouper{p, next}
-}
-
-func (g *Grouper) Start(pipeline *Pipeline) Processor {
-	return &Grouped{make(map[*Config]Processor), pipeline, *g}
-}
-
-func (g *Grouped) Process(result *benchfmt.Result) {
-	key := g.pipeline.Project(result, g.op.project)
-	sub, ok := g.Groups[key]
-	if !ok {
-		sub = g.op.next.Start(g.pipeline)
-		g.Groups[key] = sub
-	}
-	sub.Process(result)
-}
-
-// A Tracker is an Operator that produces a *Tracked.
-type Tracker struct {
-	project Projection
-}
-
-// A Tracked is a Processor that collects the unique values of a
-// Projection in order of first observation.
+// A Tracked stores the results of a Tracker for a single group.
 type Tracked struct {
 	// Configs is the set of distinct Configs resulting from the
-	// projection of all elements in Next, in order of first
+	// Projection of all elements in this group, in order of first
 	// observation.
 	Configs []*Config
 
 	// Order is the index of each Config in Configs.
 	Order map[*Config]int
-
-	pipeline *Pipeline
-	op       Tracker
 }
 
-var _ Operator = (*Tracker)(nil)
-
-func NewTracker(p Projection) *Tracker {
-	return &Tracker{p}
-}
-
-func (t *Tracker) Start(pipeline *Pipeline) Processor {
-	return &Tracked{Order: make(map[*Config]int), pipeline: pipeline, op: *t}
-}
-
-func (t *Tracked) Process(result *benchfmt.Result) {
-	key := t.pipeline.Project(result, t.op.project)
-	if _, ok := t.Order[key]; !ok {
-		t.Order[key] = len(t.Configs)
-		t.Configs = append(t.Configs, key)
+func NewTracker(pipeline *Pipeline, project Projection) *Tracker {
+	return &Tracker{
+		Tracked:  make(map[*Config]*Tracked),
+		pipeline: pipeline,
+		project:  project,
 	}
 }
 
-// A Tee is an Operator that produces a *Teed.
+func (t *Tracker) Process(result *benchfmt.Result, groupKey *Config) {
+	tracked := t.Tracked[groupKey]
+	if tracked == nil {
+		tracked = &Tracked{Order: make(map[*Config]int)}
+		t.Tracked[groupKey] = tracked
+	}
+
+	key := t.pipeline.Project(result, t.project)
+	if _, ok := tracked.Order[key]; !ok {
+		tracked.Order[key] = len(tracked.Configs)
+		tracked.Configs = append(tracked.Configs, key)
+	}
+}
+
+// A Tee is a Processor that passes results to one or more other
+// Processors.
 type Tee struct {
-	subs []Operator
+	subs []Processor
 }
 
-type Teed struct {
-	Subs []Processor
-}
+var _ Processor = (*Tee)(nil)
 
-var _ Operator = (*Tee)(nil)
-
-func NewTee(subs []Operator) *Tee {
+func NewTee(pipeline *Pipeline, subs ...Processor) *Tee {
 	return &Tee{subs}
 }
 
-func (t *Tee) Start(pipeline *Pipeline) Processor {
-	subs := make([]Processor, len(t.subs))
-	for i := range subs {
-		subs[i] = t.subs[i].Start(pipeline)
-	}
-	return &Teed{subs}
-}
-
-func (t *Teed) Process(result *benchfmt.Result) {
-	for _, sub := range t.Subs {
-		sub.Process(result)
+func (t *Tee) Process(result *benchfmt.Result, groupKey *Config) {
+	for _, sub := range t.subs {
+		sub.Process(result, groupKey)
 	}
 }

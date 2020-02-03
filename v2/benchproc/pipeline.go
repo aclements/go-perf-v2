@@ -6,18 +6,16 @@
 // results.
 //
 // A processing pipeline is driven by a Pipeline object and described
-// by a tree of Operators. An Operator itself is an abstract operation
-// that gets instantiated into one or more Processors that are bound
-// to a particular pipeline.
+// by a tree of Processors.
 package benchproc
 
 import "golang.org/x/perf/v2/benchfmt"
 
-// A Pipeline is a collection of Projections and Operators for
-// processing a stream of benchmark results.
+// A Pipeline is a tree of Processors for processing a stream of
+// benchmark results.
 type Pipeline struct {
 	// Root is the entry-point of this Pipeline.
-	Root Processor
+	root Processor
 
 	// ConfigSet is the space of Configs used in this Pipeline.
 	ConfigSet *ConfigSet
@@ -34,19 +32,34 @@ type projCache struct {
 	val *Config
 }
 
-func NewPipeline(rootOp Operator) *Pipeline {
-	pipeline := &Pipeline{ConfigSet: new(ConfigSet)}
-	pipeline.Root = rootOp.Start(pipeline)
-	return pipeline
+// NewPipeline returns an empty pipeline. The caller should construct
+// a tree of Processors to use in this Pipeline, then call SetRoot to
+// register the root of the tree, then call Process on each benchmark
+// result.
+func NewPipeline() *Pipeline {
+	return &Pipeline{ConfigSet: new(ConfigSet)}
 }
 
+// SetRoot sets the root of the processing pipeline. This may only be
+// called once on p.
+//
+// The root processor will always be called with the empty group key
+// (nil).
+func (p *Pipeline) SetRoot(root Processor) {
+	if p.root != nil {
+		panic("pipeline root already set")
+	}
+	p.root = root
+}
+
+// Process processes a single benchmark result.
 func (p *Pipeline) Process(result *benchfmt.Result) {
 	// Invalidate projection cache.
 	p.projGen++
 	p.projCur = result
 
-	// Process the result.
-	p.Root.Process(result)
+	// Process the result, starting with the empty group tuple.
+	p.root.Process(result, nil)
 }
 
 // Project returns the projection of result by proj. This adds caching
@@ -70,20 +83,19 @@ func (p *Pipeline) Project(result *benchfmt.Result, proj Projection) *Config {
 	return val
 }
 
-// An Operator describes an operation on benchmark results. Many
-// Operators preform some observation of the result and pass it on to
-// another Operator.
-type Operator interface {
-	// Start returns a new Processor bound to a Pipeline with a
-	// fresh state that will apply the operation described by this
-	// Operator. An Operator may be instantiated multiple times on
-	// the same Pipeline, for example for if results are being
-	// demultiplexed into different groups.
-	Start(*Pipeline) Processor
-}
-
-// A Processor processes a stream of benchmark results.
+// A Processor is a node in a benchmark result processing pipeline.
+//
+// A given Processor type may be an interior processor or a leaf
+// processor. Interior processors typically accumulate on state of
+// their own, but observe the result in some way and invoke other
+// Processors to further process a result. Leaf processors typically
+// gather results.
 type Processor interface {
 	// Process processes one result.
-	Process(result *benchfmt.Result)
+	//
+	// The groupKey argument gives the current grouping key.
+	// Grouping operations can extend groupKey to further
+	// subdivide groups before calling other Processors. Leaf
+	// operations should separate their results by groupKey.
+	Process(result *benchfmt.Result, groupKey *Config)
 }

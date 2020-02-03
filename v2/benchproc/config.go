@@ -71,6 +71,22 @@ func (c *Config) Tuple() []*Config {
 type ConfigSet struct {
 	kvs    map[configKV]*Config
 	tuples map[configTuple]*Config
+
+	strings map[string]string
+}
+
+// Bytes interns str. This is useful for strings that are going to be
+// retained by key/value Configs anyway.
+func (s *ConfigSet) Bytes(bytes []byte) string {
+	if s.strings == nil {
+		s.strings = make(map[string]string)
+	}
+	if str, ok := s.strings[string(bytes)]; ok {
+		return str
+	}
+	str := string(bytes)
+	s.strings[str] = str
+	return str
 }
 
 // KeyValue constructs a key/value Config.
@@ -81,24 +97,6 @@ func (s *ConfigSet) KeyValue(key, val string) *Config {
 	kv := configKV{key, val}
 	c := s.kvs[kv]
 	if c == nil {
-		c = &Config{configKV: kv}
-		s.kvs[kv] = c
-	}
-	return c
-}
-
-// KeyValueBytes is like KeyValue, but operates on byte slices. This
-// can avoid allocation in some cases.
-func (s *ConfigSet) KeyValueBytes(key, val []byte) *Config {
-	if s.kvs == nil {
-		s.kvs = make(map[configKV]*Config)
-	}
-	// The compiler will optimize away this string conversion, but
-	// (as of 1.13) only if it's literally in the map index.
-	c := s.kvs[configKV{string(key), string(val)}]
-	if c == nil {
-		// TODO: Intern the strings?
-		kv := configKV{string(key), string(val)}
 		c = &Config{configKV: kv}
 		s.kvs[kv] = c
 	}
