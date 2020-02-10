@@ -17,9 +17,12 @@ import (
 	"time"
 )
 
-func parseAll(t *testing.T, data string) []*Result {
+func parseAll(t *testing.T, data string, setup ...func(r *Reader)) []*Result {
 	sr := strings.NewReader(data)
 	r := NewReader(sr, "test")
+	for _, f := range setup {
+		f(r)
+	}
 	var out []*Result
 	for r.Scan() {
 		res, err := r.Result()
@@ -35,12 +38,6 @@ func parseAll(t *testing.T, data string) []*Result {
 	return out
 }
 
-// errResult returns a result that captures an error message. This is
-// just a convenience for testing.
-func errResult(msg string) *Result {
-	return &Result{FullName: []byte("error: " + msg)}
-}
-
 func printResult(w io.Writer, r *Result) {
 	for _, fc := range r.FileConfig {
 		fmt.Fprintf(w, "{%s: %s} ", fc.Key, fc.Value)
@@ -52,17 +49,24 @@ func printResult(w io.Writer, r *Result) {
 	fmt.Fprintf(w, "\n")
 }
 
+// errResult returns a result that captures an error message. This is
+// just a convenience for testing.
+func errResult(msg string) *Result {
+	return &Result{FullName: []byte("error: " + msg)}
+}
+
+func r(cfg []Config, fullName string, iters int, vals []Value) *Result {
+	// Make the Result and Clone it to populate internal
+	// structures.
+	return (&Result{
+		FileConfig: cfg,
+		FullName:   []byte(fullName),
+		Iters:      iters,
+		Values:     vals,
+	}).Clone()
+}
+
 func TestReader(t *testing.T) {
-	r := func(cfg []Config, fullName string, iters int, vals []Value) *Result {
-		// Make the Result and Clone it to populate internal
-		// structures.
-		return (&Result{
-			FileConfig: cfg,
-			FullName:   []byte(fullName),
-			Iters:      iters,
-			Values:     vals,
-		}).Clone()
-	}
 	type testCase struct {
 		name, input string
 		want        []*Result
@@ -174,6 +178,34 @@ BenchmarkOne 100 1 ns/op
 				t.Error(diff.String())
 			}
 		})
+	}
+}
+
+func TestSetFileConfig(t *testing.T) {
+	data := `
+key: value
+override: file
+BenchmarkOne 100 1 ns/op`
+	got := parseAll(t, data, func(r *Reader) {
+		r.SetFileConfig("override", "program")
+	})
+	want := r(
+		[]Config{{"override", "program"}, {"key", "value"}},
+		"One",
+		100,
+		[]Value{{1, "ns/op"}},
+	)
+	want.permConfig = 1
+	if len(got) != 1 {
+		t.Fatalf("got %d results, expected 1", len(got))
+	}
+	if !reflect.DeepEqual(got[0], want) {
+		var diff bytes.Buffer
+		fmt.Fprintf(&diff, "got:\n")
+		printResult(&diff, got[0])
+		fmt.Fprintf(&diff, "want:\n")
+		printResult(&diff, want)
+		t.Error(diff.String())
 	}
 }
 

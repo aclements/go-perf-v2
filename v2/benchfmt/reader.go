@@ -59,7 +59,8 @@ func NewReader(r io.Reader, fileName string) *Reader {
 }
 
 // Reset resets the reader to begin reading from a new input. This
-// also resets all of the file-level configuration values.
+// also resets all of the file-level configuration values, including
+// those set by SetFileConfig.
 func (r *Reader) Reset(ior io.Reader, fileName string) {
 	r.s = bufio.NewScanner(ior)
 	if fileName == "" {
@@ -84,6 +85,12 @@ func (r *Reader) Reset(ior io.Reader, fileName string) {
 	if r.interns == nil {
 		r.interns = make(map[string]string)
 	}
+}
+
+// SetFileConfig injects a file-level key/value configuration. Keys
+// set with SetFileConfig cannot be overridden by the file.
+func (r *Reader) SetFileConfig(key, val string) {
+	r.result.setFileConfig(key, val, true)
 }
 
 var benchmarkPrefix = []byte("Benchmark")
@@ -124,7 +131,7 @@ func (r *Reader) Scan() bool {
 			// API much less friendly.
 			keyStr := r.intern(key)
 			valStr := string(val)
-			r.result.SetFileConfig(keyStr, valStr)
+			r.result.setFileConfig(keyStr, valStr, false)
 		}
 		// Ignore the line.
 	}

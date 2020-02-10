@@ -45,6 +45,10 @@ type Result struct {
 	// FileConfig.
 	configPos map[string]int
 
+	// permConfig indicates that FileConfig[:permConfig] cannot be
+	// overridden.
+	permConfig int
+
 	// nameParts is a cache of the split parts of FullName. Its
 	// length is 0 if it has not been computed.
 	nameParts [][]byte
@@ -70,6 +74,7 @@ func (r *Result) Clone() *Result {
 		Iters:      r.Iters,
 		Values:     append([]Value(nil), r.Values...),
 		configPos:  make(map[string]int),
+		permConfig: r.permConfig,
 	}
 	// Populate configPos.
 	for i, cfg := range r2.FileConfig {
@@ -78,18 +83,29 @@ func (r *Result) Clone() *Result {
 	return r2
 }
 
-// SetFileConfig sets file configuration key to value, overriding or
-// adding the configuration as necessary.
-func (r *Result) SetFileConfig(key, value string) {
+// setFileConfig sets file configuration key to value, overriding or
+// adding the configuration as necessary. perm indicates that this is
+// a permanent config value that cannot be overridden by a file.
+func (r *Result) setFileConfig(key, value string, perm bool) {
 	if r.configPos == nil {
 		r.configPos = make(map[string]int)
 	}
 	pos, ok := r.configPos[key]
 	if ok {
+		if !perm && pos < r.permConfig {
+			// Cannot override permanent config.
+			return
+		}
 		r.FileConfig[pos].Value = value
 		return
 	}
 	pos = len(r.FileConfig)
+	if perm {
+		if pos != r.permConfig {
+			panic("setting permanent file config after reading file")
+		}
+		r.permConfig = pos + 1
+	}
 	r.FileConfig = append(r.FileConfig, Config{key, value})
 	r.configPos[key] = pos
 }
