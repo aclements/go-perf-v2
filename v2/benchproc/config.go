@@ -31,8 +31,8 @@ type configTuple struct {
 	// each pair adds an element to the end. This is like a
 	// reversed singly-linked list.
 
-	// pred is nil or a tuple config for all but the last element.
-	pred *Config
+	// prefix is nil or a tuple config for all but the last element.
+	prefix *Config
 	// elt is the last element in this tuple.
 	elt *Config
 }
@@ -61,7 +61,7 @@ func (c *Config) Tuple() []*Config {
 	out := make([]*Config, c.tupleLen)
 	for i := len(out) - 1; i >= 0; i-- {
 		out[i] = c.elt
-		c = c.pred
+		c = c.prefix
 	}
 	return out
 }
@@ -119,15 +119,15 @@ func (s *ConfigSet) Append(base *Config, elts ...*Config) *Config {
 	if base != nil {
 		baseLen = base.tupleLen
 	}
-	pred := base
+	prefix := base
 	found := true
 	for i, elt := range elts {
-		key := configTuple{pred, elt}
+		key := configTuple{prefix, elt}
 		if found {
 			// Everything up to this point has been
 			// interned, so this might be, too.
 			if c := s.tuples[key]; c != nil {
-				pred = c
+				prefix = c
 				continue
 			}
 			// Not interned, so no remaining pairs will be
@@ -136,7 +136,7 @@ func (s *ConfigSet) Append(base *Config, elts ...*Config) *Config {
 		}
 		c := &Config{configTuple: key, tupleLen: baseLen + i + 1}
 		s.tuples[key] = c
-		pred = c
+		prefix = c
 	}
-	return pred
+	return prefix
 }

@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build ignore
+
+// XXX Move package doc
+
 // Package benchproc implements processing pipelines for benchmark
 // results.
 //

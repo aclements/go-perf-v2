@@ -5,36 +5,71 @@
 package benchproc
 
 import (
-	"bytes"
-	"strings"
-
 	"golang.org/x/perf/v2/benchfmt"
 )
 
 // A Projection extracts some aspect of a benchmark result into a
 // Config.
 type Projection interface {
-	Project(*Pipeline, *benchfmt.Result) *Config
+	Project(*Projector) *Config
+}
+
+// A Projector applies Projections to a benchmark result. This stores
+// the state necessary to apply a Projection and caches their results.
+type Projector struct {
+	configSet *ConfigSet
+	result    *benchfmt.Result
+	cache     map[Projection]projCache
+	gen       uint64
+}
+
+type projCache struct {
+	gen uint64
+	val *Config
+}
+
+func NewProjector(cs *ConfigSet) *Projector {
+	return &Projector{cs, nil, make(map[Projection]projCache), 0}
+}
+
+func (p *Projector) Reset(res *benchfmt.Result) {
+	p.gen++
+	p.result = res
+}
+
+func (p *Projector) Project(projection Projection) *Config {
+	if cached, ok := p.cache[projection]; ok && cached.gen == p.gen {
+		return cached.val
+	}
+	val := projection.Project(p)
+	p.cache[projection] = projCache{p.gen, val}
+	return val
+}
+
+func (p *Projector) ConfigSet() *ConfigSet {
+	return p.configSet
+}
+
+func (p *Projector) Cur() *benchfmt.Result {
+	return p.result
 }
 
 // A ProjectProduct combines the results of one or more other
 // projections into a tuple.
 type ProjectProduct struct {
-	projs []Projection
+	Elts []Projection
 }
 
-func NewProjectProduct(projs ...Projection) *ProjectProduct {
-	return &ProjectProduct{projs}
-}
-
-func (p *ProjectProduct) Project(pipeline *Pipeline, res *benchfmt.Result) *Config {
+func (p *ProjectProduct) Project(pr *Projector) *Config {
 	// Invoke each child projection.
 	subs := make([]*Config, 0, 16)
-	for _, proj := range p.projs {
-		subs = append(subs, pipeline.Project(res, proj))
+	for _, proj := range p.Elts {
+		subs = append(subs, pr.Project(proj))
 	}
-	return pipeline.ConfigSet.Tuple(subs...)
+	return pr.ConfigSet().Tuple(subs...)
 }
+
+/*
 
 type ProjectFileKey struct {
 	key     string
@@ -152,3 +187,4 @@ func (p *ProjectNameKey) Project(pipeline *Pipeline, res *benchfmt.Result) *Conf
 	// Not found.
 	return cs.KeyValue(p.key, "")
 }
+*/
