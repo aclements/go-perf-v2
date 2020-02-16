@@ -116,6 +116,16 @@ func (r *Result) FileConfigIndex(key string) (pos int, ok bool) {
 	return
 }
 
+// Value returns the measurement for the given unit.
+func (r *Result) Value(unit string) (float64, bool) {
+	for _, v := range r.Values {
+		if v.Unit == unit {
+			return v.Value, true
+		}
+	}
+	return 0, false
+}
+
 // NameParts returns the base name and sub-benchmark configuration
 // parts. Each sub-benchmark configuration part is one of three forms:
 //
