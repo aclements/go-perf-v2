@@ -133,7 +133,7 @@ func commonSchema1(configs []*Config, cow bool) *schema {
 				continue
 			}
 
-			prefix, elem := cfg.PrefixElem()
+			prefix, elem := cfg.PrefixLast()
 			configs[i] = prefix
 			if len(elems) == 0 || elem != elems[len(elems)-1] {
 				elems = append(elems, elem)
@@ -194,7 +194,7 @@ func (s *schema) flatten(config *Config, buf []*Config) []*Config {
 			tuple = tuple[:len(tuple)-1]
 		}
 		for len(tuple) > 0 {
-			prefix, elem := config.PrefixElem()
+			prefix, elem := config.PrefixLast()
 			buf = flatten1(tuple[len(tuple)-1], elem, buf)
 			tuple = tuple[:len(tuple)-1]
 			config = prefix

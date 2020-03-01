@@ -6,9 +6,6 @@ package benchproc
 
 import "strings"
 
-// XXX Inconsistent: KeyVal vs KeyValue. Elt vs Elem. Rename to "Val"
-// everywhere and PrefixElem -> PrefixLast.
-
 // A Config is either a key/value pair or a tuple of Configs.
 //
 // A Config is immutable and is constructed via a ConfigSet, which
@@ -55,9 +52,9 @@ func (c *Config) KeyVal() (key, val string) {
 	return c.key, c.val
 }
 
-// Value returns the value of a key/value Config. This is useful when
+// Val returns the value of a key/value Config. This is useful when
 // the key is already known.
-func (c *Config) Value() string {
+func (c *Config) Val() string {
 	return c.val
 }
 
@@ -85,9 +82,9 @@ func (c *Config) TupleLen() int {
 	return c.tupleLen
 }
 
-// PrefixElem returns the prefix tuple and the last element of a tuple
-// Config.
-func (c *Config) PrefixElem() (*Config, *Config) {
+// PrefixLast returns the tuple containing all but the last element
+// and the last element of a tuple Config.
+func (c *Config) PrefixLast() (*Config, *Config) {
 	if c == nil || c.IsKeyVal() {
 		return nil, nil
 	}
@@ -146,7 +143,7 @@ func (s *ConfigSet) Bytes(bytes []byte) string {
 	return str
 }
 
-// KeyValue constructs a key/value Config.
+// KeyVal constructs a key/value Config.
 func (s *ConfigSet) KeyVal(key, val string) *Config {
 	if s.kvs == nil {
 		s.kvs = make(map[configKV]*Config)

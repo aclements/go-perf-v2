@@ -110,7 +110,7 @@ func renderTree(tree []*ConfigTree) string {
 		if node.Config == nil {
 			buf.WriteString("(nil")
 		} else {
-			fmt.Fprintf(buf, "(%s", node.Config.Value())
+			fmt.Fprintf(buf, "(%s", node.Config.Val())
 		}
 		for _, child := range node.Children {
 			buf.WriteByte(' ')
