@@ -32,11 +32,13 @@ type ConfigTree struct {
 }
 
 // NewConfigTree computes the ConfigTree of a set of Configs. The
-// Configs must all have a compatible schema. They will be flattened
-// into that schema, and combined into a tree by their common
-// prefixes. It also returns the sequence of keys corresponding to the
-// levels in the returned tree. All non-nil Configs at the level i of
-// the tree will have key keys[i].
+// Configs must all be schema compatible. They will be flattened into
+// the common schema of the set, and combined into a tree by their
+// common prefixes.
+//
+// NewConfigTree also returns the sequence of keys corresponding to
+// the levels in the returned tree. All non-nil Configs at the level i
+// of the tree will have key keys[i].
 func NewConfigTree(configs []*Config) (tree []*ConfigTree, keys []string) {
 	if len(configs) == 0 {
 		return nil, nil

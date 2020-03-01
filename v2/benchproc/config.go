@@ -13,8 +13,15 @@ import "strings"
 // be compared using just pointer equality.
 //
 // Nesting of Config tuples allows constructing complex
-// configurations. And tuple Configs can be efficiently extended to
-// form new Configs.
+// configurations.
+//
+// A Config has an implied "schema", which consists of the tuple
+// structure and the keys at the leafs of the tuple structure. A
+// Config is "compatible" with a schema if the Config's implied schema
+// can be constructed by truncating tuples in the compatible schema. A
+// set of Configs is "schema compatible" if there exists a single
+// schema where all Configs in the set are compatible with that
+// schema.
 type Config struct {
 	configKV
 	configTuple
