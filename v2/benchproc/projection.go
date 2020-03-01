@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// XXX The Projector is not turning out to be useful, and is really
+// annoying. Move back to uncached projections.
+
 package benchproc
 
 import (
@@ -56,91 +59,78 @@ func (p *Projector) Cur() *benchfmt.Result {
 
 // A ProjectProduct combines the results of one or more other
 // projections into a tuple.
-type ProjectProduct struct {
-	Elts []Projection
-}
+type ProjectProduct []Projection
 
 func (p *ProjectProduct) Project(pr *Projector) *Config {
 	// Invoke each child projection.
 	subs := make([]*Config, 0, 16)
-	for _, proj := range p.Elts {
+	for _, proj := range *p {
 		subs = append(subs, pr.Project(proj))
 	}
 	return pr.ConfigSet().Tuple(subs...)
 }
 
-/*
-
+// ProjectFileKey projects a file configuration key.
 type ProjectFileKey struct {
-	key     string
-	pos     int
-	lastLen int
+	Key string
 }
 
-// XXX
-//
-// Note that this projection is stateful, so it should not be used in
-// more than one Pipeline.
-func NewProjectFileKey(key string) *ProjectFileKey {
-	return &ProjectFileKey{key, -1, 0}
-}
-
-// XXX This forces me to also use the same benchfmt.Reader for the
-// whole thing, versus being able to feed results from multiple Reader
-// instances into one pipeline. Using the fixed file indexes may just
-// be a bad idea and perhaps I should just use a map.
-//
-// XXX Though if I don't do this, ProjectFileConfig becomes stateful
-// and more complicated, but maybe that's not so bad.
-
-func (p *ProjectFileKey) Project(pipeline *Pipeline, res *benchfmt.Result) *Config {
-	cs := pipeline.ConfigSet
-
-	// Find the index of the key.
-	if p.pos == -1 {
-		if len(res.FileConfig) != p.lastLen {
-			p.lastLen = len(res.FileConfig)
-			if pos, ok := res.FileConfigIndex(p.key); ok {
-				p.pos = pos
-			}
-		}
-		if p.pos == -1 {
-			return cs.KeyValue(p.key, "")
-		}
+// Project returns a key/value Config with the key p.Key and a value
+// of the file configuration key p.Key, or "" if the key is not
+// present.
+func (p *ProjectFileKey) Project(pr *Projector) *Config {
+	res := pr.Cur()
+	pos, ok := res.FileConfigIndex(p.Key)
+	val := ""
+	if ok {
+		val = res.FileConfig[pos].Value
 	}
-
-	return cs.KeyValue(p.key, res.FileConfig[p.pos].Value)
+	return pr.ConfigSet().KeyVal(p.Key, val)
 }
 
-type ProjectFileConfig struct{}
+// TODO: If any name keys are extracted, perhaps ProjectFullName needs
+// to be able to exclude them. It could rewrite the name with a *
+// there or something.
 
-func (p *ProjectFileConfig) Project(pipeline *Pipeline, res *benchfmt.Result) *Config {
-	// TODO: What if some file key was specified in another
-	// projection? I want to include all but that key. Yuck. I
-	// suppose the same could apply to name keys, which is even
-	// messier.
-
-	// Build a tuple of present keys. Even though we drop keys
-	// when deleted, because the order of keys in FileConfig never
-	// changes once they're added, the tuple will be stable even
-	// if a key is "deleted" and re-added.
-	cs := pipeline.ConfigSet
-	cfg := make([]*Config, 0, 16)
-	for _, fcfg := range res.FileConfig {
-		if fcfg.Value == "" {
-			continue
-		}
-		cfg = append(cfg, cs.KeyValue(fcfg.Key, fcfg.Value))
-	}
-	return cs.Tuple(cfg...)
-}
-
+// ProjectFullName projects the full name of a benchmark.
 type ProjectFullName struct{}
 
-func (p *ProjectFullName) Project(pipeline *Pipeline, res *benchfmt.Result) *Config {
-	cs := pipeline.ConfigSet
-	return cs.KeyValue(".name", cs.Bytes(res.FullName))
+// Project returns a key/value Config with the key ".name" and a value
+// of the full name of the benchmark.
+func (p *ProjectFullName) Project(pr *Projector) *Config {
+	cs := pr.ConfigSet()
+	return cs.KeyVal(".name", cs.Bytes(pr.Cur().FullName))
 }
+
+// ProjectFileConfig projects the full file configuration as a tuple
+// Config.
+//
+// This projection is stateful because it produces a dynamic tuple.
+type ProjectFileConfig struct {
+	order map[string]int
+}
+
+func (p *ProjectFileConfig) Project(pr *Projector) *Config {
+	// TODO: Collect keys in consistent order. If the file config
+	// was a map, I could just iterate over the order and collect
+	// keys and check if I got all of them and, if not, iterate
+	// over the file config map for missed keys. As a slice, I
+	// could have a fast path if the order is the same and a slow
+	// path if not; its easy to find the new keys, but I'm stuck
+	// in the slow path if the order changes (unless I cache
+	// position hints?). Trim empty keys from the end so tuples
+	// after a key is deleted appear the same as tuples before
+	// that key existed.
+
+	// TODO: What if some file key was specified in another
+	// projection? I want to include all but that key. Yuck. I
+	// suppose the same could apply to benchmark name keys, which
+	// is even messier.
+
+	panic("not implemented")
+}
+
+/*
 
 type ProjectBaseName struct{}
 
