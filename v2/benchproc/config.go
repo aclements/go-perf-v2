@@ -4,6 +4,11 @@
 
 package benchproc
 
+import "strings"
+
+// XXX Inconsistent: KeyVal vs KeyValue. Elt vs Elem. Rename to "Val"
+// everywhere and PrefixElem -> PrefixLast.
+
 // A Config is either a key/value pair or a tuple of Configs.
 //
 // A Config is immutable and is constructed via a ConfigSet, which
@@ -50,6 +55,12 @@ func (c *Config) KeyVal() (key, val string) {
 	return c.key, c.val
 }
 
+// Value returns the value of a key/value Config. This is useful when
+// the key is already known.
+func (c *Config) Value() string {
+	return c.val
+}
+
 // Tuple returns the elements of a tuple Config.
 func (c *Config) Tuple() []*Config {
 	if c == nil {
@@ -64,6 +75,52 @@ func (c *Config) Tuple() []*Config {
 		c = c.prefix
 	}
 	return out
+}
+
+// TupleLen returns the length of a tuple Config.
+func (c *Config) TupleLen() int {
+	if c == nil {
+		return 0
+	}
+	return c.tupleLen
+}
+
+// PrefixElem returns the prefix tuple and the last element of a tuple
+// Config.
+func (c *Config) PrefixElem() (*Config, *Config) {
+	if c == nil || c.IsKeyVal() {
+		return nil, nil
+	}
+	return c.prefix, c.elt
+}
+
+// String returns a string representation of c.
+func (c *Config) String() string {
+	if c.IsKeyVal() {
+		return c.key + ":" + c.val
+	}
+	buf := new(strings.Builder)
+	var walk func(c *Config)
+	walk = func(c *Config) {
+		if c.IsKeyVal() {
+			buf.WriteString(c.key)
+			buf.WriteByte(':')
+			buf.WriteString(c.val)
+		} else {
+			buf.WriteByte('(')
+			t := c.Tuple()
+			for i, cfg := range t {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				walk(cfg)
+			}
+			buf.WriteByte(')')
+		}
+	}
+	walk(c)
+	return buf.String()
+
 }
 
 // A ConfigSet is a collection of Configs. Configs within a single
@@ -90,7 +147,7 @@ func (s *ConfigSet) Bytes(bytes []byte) string {
 }
 
 // KeyValue constructs a key/value Config.
-func (s *ConfigSet) KeyValue(key, val string) *Config {
+func (s *ConfigSet) KeyVal(key, val string) *Config {
 	if s.kvs == nil {
 		s.kvs = make(map[configKV]*Config)
 	}
