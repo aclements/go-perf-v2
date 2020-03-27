@@ -32,4 +32,5 @@ type Comparison struct {
 }
 
 func (d *Distribution) Compare(d2 *Distribution) Comparison {
+	return Comparison{}
 }
