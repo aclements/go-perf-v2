@@ -9,14 +9,16 @@ import (
 	"flag"
 	"fmt"
 	"image/color"
+	"io"
 	"log"
+	"math"
 	"os"
 	"sort"
 	"strings"
 
+	"github.com/aclements/go-moremath/scale"
 	"golang.org/x/perf/v2/benchfmt"
 	"golang.org/x/perf/v2/benchproc"
-	"golang.org/x/perf/v2/benchstat"
 	"golang.org/x/perf/v2/benchunit"
 )
 
@@ -28,23 +30,41 @@ var Set1_9 = []color.Color{color.RGBA{228, 26, 28, 255}, color.RGBA{55, 126, 184
 
 var pal = Set1_9
 
-type col struct {
-	phases OMap // phase config -> measurements
-
-	csum map[*benchproc.Config]phase
-	sum  float64
+// A Row collects data from comparable benchmark runs and for a
+// particular unit.
+type Row interface {
+	Add(colCfg, phaseCfg *benchproc.Config, val float64)
+	Finish(cols []*benchproc.Config) []Cell
+	RenderKey(svg *SVG, x float64, y scale.QQ, last Cell, lastRight float64) (right, bot float64)
 }
 
-type phase struct {
-	start, end float64
+// A Cell captures data from a sequence of phases in a given benchmark
+// configuration.
+type Cell interface {
+	Extent() (xmin, xmax, ymin, ymax float64)
+	Render(svg *SVG, x, y scale.QQ, prev Cell, prevRight float64)
 }
 
-func (p phase) len() float64 {
-	return p.end - p.start
+const labelFontSize = 8
+
+type SVG struct {
+	w           io.Writer
+	phaseColors OMap
+	gen         int
 }
 
-func newCol() *col {
-	return &col{phases: OMap{New: func(*benchproc.Config) interface{} { return ([]float64)(nil) }}}
+func (s *SVG) Write(x []byte) (int, error) {
+	return s.w.Write(x)
+}
+
+func (s *SVG) PhaseColor(phaseCfg *benchproc.Config) string {
+	return svgColor(s.phaseColors.Load(phaseCfg).(color.Color))
+}
+
+func (s *SVG) GenID(prefix string) string {
+	id := fmt.Sprintf("%s%d", prefix, s.gen)
+	s.gen++
+	return id
 }
 
 type unitInfo struct {
@@ -71,14 +91,16 @@ func main() {
 	}
 	colBy := colBys[0]
 	phaseBy := &benchproc.ProjectFullName{}
-	var phaseTracker OMap
 
-	// Map from (unit, colBy) -> *col
-	cols := OMap2D{
-		New: func(_, _ *benchproc.Config) interface{} {
-			return newCol()
-		},
-	}
+	var phaseColors OMap // phase config -> color.Color
+
+	// cells maps from (unit, colBy) to Cell. Initially we fill
+	// this with nils and then populate the Cells when we can
+	// finalize the Rows.
+	var cells OMap2D
+
+	// rows tracks the Row for each unit config.
+	rows := make(map[*benchproc.Config]Row)
 
 	// XXX Take this as an argument?
 	units := make(map[string]unitInfo)
@@ -115,7 +137,11 @@ func main() {
 
 			colCfg := colBy.Project(cs, res)
 			phaseCfg := phaseBy.Project(cs, res)
-			phaseTracker.Store(phaseCfg, nil)
+
+			// Assign colors to phases.
+			if phaseColors.Load(phaseCfg) == nil {
+				phaseColors.Store(phaseCfg, pal[len(phaseColors.Keys)%len(pal)])
+			}
 
 			for _, value := range res.Values {
 				unitInfo, ok := units[value.Unit]
@@ -124,8 +150,16 @@ func main() {
 				}
 				val := value.Value * unitInfo.tidyFactor
 
-				col := cols.LoadOrNew(unitInfo.cfg, colCfg).(*col)
-				col.phases.Store(phaseCfg, append(col.phases.LoadOrNew(phaseCfg).([]float64), val))
+				// Record order in cells.
+				cells.Store(unitInfo.cfg, colCfg, nil)
+
+				// Add measurement to the row.
+				row := rows[unitInfo.cfg]
+				if row == nil {
+					row = NewStackRow(unitInfo.class)
+					rows[unitInfo.cfg] = row
+				}
+				row.Add(colCfg, phaseCfg, val)
 			}
 		}
 		if err := reader.Err(); err != nil {
@@ -134,39 +168,21 @@ func main() {
 		f.Close()
 	}
 
-	if len(cols.Rows) == 0 {
+	if len(cells.Rows) == 0 {
 		log.Fatal("no data")
 	}
 
-	// Finalize distributions.
-	maxSum := make(map[string]float64)
-	cols.Map(func(unitCfg, _ *benchproc.Config, col1 interface{}) interface{} {
-		col := col1.(*col)
-		col.csum = make(map[*benchproc.Config]phase)
-		var csum float64
-		for _, cfg := range col.phases.Keys {
-			dist := benchstat.NewDistribution(col.phases.Load(cfg).([]float64), benchstat.DistributionOptions{})
-			col.csum[cfg] = phase{csum, csum + dist.Center}
-			csum += dist.Center
+	// Finalize rows and populate cells map.
+	for rowCfg, row := range rows {
+		rowCells := row.Finish(cells.Cols)
+		for i, colCfg := range cells.Cols {
+			cells.Store(rowCfg, colCfg, rowCells[i])
 		}
-		col.sum = csum
-
-		unit := unitCfg.Val()
-		if csum > maxSum[unit] {
-			maxSum[unit] = csum
-		}
-
-		return col
-	})
-
-	// Assign colors to phases.
-	colors := make(map[*benchproc.Config]color.Color)
-	for i, cfg := range phaseTracker.Keys {
-		colors[cfg] = pal[i%len(pal)]
 	}
 
 	// Emit SVG
-	svg := new(bytes.Buffer)
+	svgBuf := new(bytes.Buffer)
+	svg := &SVG{w: svgBuf, phaseColors: phaseColors}
 	const unitFontSize = 12
 	const unitFontHeight = 12 * 5 / 4
 	const colWidth = 100
@@ -175,9 +191,6 @@ func main() {
 	const colFontHeight = 12 * 5 / 4
 	const rowHeight = 300
 	const rowGap = 10
-	const labelFontSize = 8
-	const phaseWidth = 150
-	var eltID int
 	x := func(col int) (float64, float64) {
 		l := unitFontHeight + col*(colWidth+colSpace)
 		return float64(l), float64(l + colWidth)
@@ -185,7 +198,7 @@ func main() {
 
 	// Column labels
 	var topSpace float64
-	colTree, _ := benchproc.NewConfigTree(cols.Cols)
+	colTree, _ := benchproc.NewConfigTree(cells.Cols)
 	var walkColTree func(tree *benchproc.ConfigTree, rowI, colI int)
 	walkColTree = func(tree *benchproc.ConfigTree, rowI, colI int) {
 		if tree.Config != nil {
@@ -213,119 +226,63 @@ func main() {
 	}
 	bot := topSpace
 
-	// Unit rows
+	// Rows
 	var maxRight float64
-	for rowI, unitCfg := range cols.Rows {
+	for rowI, unitCfg := range cells.Rows {
 		top := topSpace + float64(rowI*(rowHeight+rowGap))
-		if top+rowHeight > bot {
-			bot = top + rowHeight
-		}
 
 		unit := unitCfg.Val()
 		unitInfo := units[unit]
-		valToPix := rowHeight / maxSum[unit]
-		y := func(val float64) float64 {
-			return top + val*valToPix
-		}
 
 		// Unit label
 		fmt.Fprintf(svg, `  <text font-size="%d" text-anchor="middle" transform="translate(%f %f) rotate(-90)">%s</text>`+"\n", unitFontSize, float64(unitFontSize), float64(top+rowHeight/2), unitInfo.tidyUnit)
 
-		// Phase bars
-		var prevCol *col
-		for colI, colCfg := range cols.Cols {
-			colX, _ := cols.Load(unitCfg, colCfg)
-			if colX == nil {
+		// Construct X and Y scalers for this row.
+		var xIn, yIn scale.Linear
+		for i, colCfg := range cells.Cols {
+			cell := cells.Load(unitCfg, colCfg).(Cell)
+			if cell == nil {
 				continue
 			}
-			col := colX.(*col)
-			l, _ := x(colI)
-			for _, phaseCfg := range col.phases.Keys {
-				phase := col.csum[phaseCfg]
-				fill := svgColor(colors[phaseCfg])
-				title := phaseCfg.Val()
-
-				// Draw rectangle for this phase.
-				path := fmt.Sprintf("M%f %fh%dV%fh%dz", l, y(phase.start), colWidth, y(phase.end), -colWidth)
-				fmt.Fprintf(svg, `  <path d="%s" fill="%s"><title>%s (%s)</title></path>`+"\n", path, fill, title, benchunit.Scale(phase.len(), unitInfo.class))
-
-				// Phase label.
-				clipID := fmt.Sprintf("clip%d", eltID)
-				eltID++
-				fmt.Fprintf(svg, `  <clipPath id="%s"><path d="%s" /></clipPath>`+"\n", clipID, path)
-				fmt.Fprintf(svg, `  <text x="%f" y="%f" clip-path="url(#%s)" font-size="%d" text-anchor="middle" dy=".4em">%s (%.0f%%)</text>`+"\n", l+colWidth/2, (y(phase.start)+y(phase.end))/2, clipID, labelFontSize, benchunit.Scale(phase.len(), unitInfo.class), 100*phase.len()/col.sum)
-
-				// Connect to phase in previous column.
-				if prevCol != nil {
-					phase0, ok := prevCol.csum[phaseCfg]
-					if !ok {
-						continue
-					}
-					_, pr := x(colI - 1)
-					fmt.Fprintf(svg, `  <path d="M%f %fL%f %fV%fL%f %fz" fill="%s" fill-opacity="0.5" />`+"\n", pr, y(phase0.start), l, y(phase.start), y(phase.end), pr, y(phase0.end), fill)
-				}
+			xmin, xmax, ymin, ymax := cell.Extent()
+			if i == 0 {
+				xIn.Min, xIn.Max = xmin, xmax
+				yIn.Min, yIn.Max = ymin, ymax
+			} else {
+				xIn.Min, xIn.Max = math.Min(xIn.Min, xmin), math.Max(xIn.Max, xmax)
+				yIn.Min, yIn.Max = math.Min(yIn.Min, ymin), math.Max(yIn.Max, ymax)
 			}
-			prevCol = col
 		}
-		_, right := x(len(cols.Cols) - 1)
+		yOut := scale.Linear{Min: top, Max: top + rowHeight}
+		yScale := scale.QQ{&yIn, &yOut}
+		if yOut.Max > bot {
+			bot = yOut.Max
+		}
 
-		// Label top N phases > 1% in right-most column.
-		const numPhases = 15
-		const minPhaseFrac = 0.01
-		const phaseFontSize = colFontSize
-		const phaseFontHeight = phaseFontSize * 5 / 4
-		var topPhases []*benchproc.Config
-		for cfg, phase := range prevCol.csum {
-			if phase.len() < prevCol.sum*minPhaseFrac {
+		// Render cells.
+		var prev Cell
+		var prevRight float64
+		for i, colCfg := range cells.Cols {
+			cell := cells.Load(unitCfg, colCfg).(Cell)
+			if cell == nil {
 				continue
 			}
-			topPhases = append(topPhases, cfg)
-		}
-		// Get the top N phases.
-		sort.Slice(topPhases, func(i, j int) bool {
-			p1 := prevCol.csum[topPhases[i]]
-			p2 := prevCol.csum[topPhases[j]]
-			return p1.len() > p2.len()
-		})
-		if len(topPhases) > numPhases {
-			topPhases = topPhases[:numPhases]
-		}
-		// Sort back into phase order.
-		sort.Slice(topPhases, func(i, j int) bool {
-			order := prevCol.phases.KeyPos
-			return order[topPhases[i]] < order[topPhases[j]]
-		})
-		// Create initial visual intervals.
-		intervals := make([]interval, len(topPhases))
-		for i := range intervals {
-			phase := prevCol.csum[topPhases[i]]
-			mid := (y(phase.start) + y(phase.end)) / 2
-			intervals[i] = interval{mid - phaseFontHeight/2, mid + phaseFontHeight/2}
-		}
-		// Slide intervals to remove overlaps.
-		removeIntervalOverlaps(intervals)
-		// Emit labels
-		l := right + colSpace
-		for i, cfg := range topPhases {
-			phase := prevCol.csum[cfg]
-			_, label := cfg.KeyVal()
-			in := intervals[i]
-			stroke := svgColor(colors[cfg])
-			fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" dominant-baseline="central">%s</text>`+"\n", l+phaseFontSize/2, in.mid(), phaseFontSize, label)
-			fmt.Fprintf(svg, `  <path d="M%f %fC%f %f,%f %f,%f %f" stroke="%s" stroke-width="2px" />`+"\n",
-				l-colSpace, (y(phase.start)+y(phase.end))/2,
-				l-colSpace/2, (y(phase.start)+y(phase.end))/2,
-				l-colSpace/2, in.mid(),
-				l, in.mid(),
-				stroke)
-			if in.end > bot {
-				bot = in.end
-			}
-		}
-		right = l + phaseWidth
 
-		if right > maxRight {
-			maxRight = right
+			l, r := x(i)
+			xScale := scale.QQ{&xIn, &scale.Linear{Min: l, Max: r}}
+			cell.Render(svg, xScale, yScale, prev, prevRight)
+			prev, prevRight = cell, r
+		}
+
+		// Render key.
+		keyLeft, _ := x(len(cells.Cols))
+		row := rows[unitCfg]
+		keyRight, keyBot := row.RenderKey(svg, keyLeft, yScale, prev, prevRight)
+		if keyRight > maxRight {
+			maxRight = keyRight
+		}
+		if keyBot > bot {
+			bot = keyBot
 		}
 	}
 
@@ -335,8 +292,12 @@ func main() {
 %s</svg>`,
 		maxRight,
 		bot,
-		svg.Bytes(),
+		svgBuf.Bytes(),
 	)
+}
+
+func mid(a, b float64) float64 {
+	return (a + b) / 2
 }
 
 func svgColor(c color.Color) string {
@@ -492,7 +453,11 @@ type oMap2DKey struct {
 	a, b *benchproc.Config
 }
 
-func (m *OMap2D) Load(row, col *benchproc.Config) (interface{}, bool) {
+func (m *OMap2D) Load(row, col *benchproc.Config) interface{} {
+	return m.cells[oMap2DKey{row, col}]
+}
+
+func (m *OMap2D) LoadOK(row, col *benchproc.Config) (interface{}, bool) {
 	cell, ok := m.cells[oMap2DKey{row, col}]
 	return cell, ok
 }
