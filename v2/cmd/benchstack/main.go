@@ -18,6 +18,7 @@ import (
 	"github.com/aclements/go-moremath/scale"
 	"golang.org/x/perf/v2/benchfmt"
 	"golang.org/x/perf/v2/benchproc"
+	"golang.org/x/perf/v2/benchstat"
 	"golang.org/x/perf/v2/benchunit"
 )
 
@@ -29,19 +30,12 @@ var Set1_9 = []color.Color{color.RGBA{228, 26, 28, 255}, color.RGBA{55, 126, 184
 
 var pal = Set1_9
 
-// A Row collects data from comparable benchmark runs and for a
-// particular unit.
-type Row interface {
-	Add(colCfg, phaseCfg *benchproc.Config, val float64)
-	Finish(cols []*benchproc.Config) []Cell
-	RenderKey(svg *SVG, x float64, y scale.QQ, last Cell, lastRight float64) (right, bot float64)
-}
-
 // A Cell captures data from a sequence of phases in a given benchmark
 // configuration.
 type Cell interface {
 	Extent() (xmin, xmax, ymin, ymax float64)
 	Render(svg *SVG, x, y scale.QQ, prev Cell, prevRight float64)
+	RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (right, bot float64)
 }
 
 const labelFontSize = 8
@@ -93,25 +87,25 @@ func main() {
 
 	var phaseColors OMap // phase config -> color.Color
 
-	// cells maps from (unit, colBy) to Cell. Initially we fill
-	// this with nils and then populate the Cells when we can
-	// finalize the Rows.
-	var cells OMap2D
-
-	// rows tracks the Row for each unit config.
-	rows := make(map[*benchproc.Config]Row)
-
 	// XXX Take this as an argument?
-	units := make(map[string]unitInfo)
+	units := make(map[*benchproc.Config]unitInfo) // unit config
 	var tidier benchunit.Tidier
 	for _, unit := range []string{"ns/op", "B/op"} {
 		cfg := cs.KeyVal(".unit", unit)
 		tidyUnit, tidyFactor := tidier.Tidy(unit)
 		unitClass := benchunit.UnitClassOf(tidyUnit)
-		units[unit] = unitInfo{cfg, tidyUnit, tidyFactor, unitClass}
+		units[cfg] = unitInfo{cfg, tidyUnit, tidyFactor, unitClass}
 	}
 
-	// Parse into data.
+	// Parse measurements into cells.
+	var measurements OMap2D // (unit, colBy) -> *OMap<phaseCfg -> []float64>
+	measurements.New = func(row, col *benchproc.Config) interface{} {
+		return &OMap{
+			New: func(key *benchproc.Config) interface{} {
+				return ([]float64)(nil)
+			},
+		}
+	}
 	var reader benchfmt.Reader
 	for _, file := range flag.Args() {
 		f, err := os.Open(file)
@@ -143,22 +137,16 @@ func main() {
 			}
 
 			for _, value := range res.Values {
-				unitInfo, ok := units[value.Unit]
+				unitCfg := cs.KeyVal(".unit", value.Unit)
+				unitInfo, ok := units[unitCfg]
 				if !ok {
 					continue
 				}
 				val := value.Value * unitInfo.tidyFactor
 
-				// Record order in cells.
-				cells.Store(unitInfo.cfg, colCfg, nil)
-
-				// Add measurement to the row.
-				row := rows[unitInfo.cfg]
-				if row == nil {
-					row = NewStackRow(unitInfo.class)
-					rows[unitInfo.cfg] = row
-				}
-				row.Add(colCfg, phaseCfg, val)
+				cell := measurements.LoadOrNew(unitCfg, colCfg).(*OMap)
+				vals := cell.LoadOrNew(phaseCfg).([]float64)
+				cell.Store(phaseCfg, append(vals, val))
 			}
 		}
 		if err := reader.Err(); err != nil {
@@ -167,15 +155,29 @@ func main() {
 		f.Close()
 	}
 
-	if len(cells.Rows) == 0 {
+	if len(measurements.Rows) == 0 {
 		log.Fatal("no data")
 	}
 
-	// Finalize rows and populate cells map.
-	for rowCfg, row := range rows {
-		rowCells := row.Finish(cells.Cols)
-		for i, colCfg := range cells.Cols {
-			cells.Store(rowCfg, colCfg, rowCells[i])
+	// Transform distributions into cells by row.
+	var cells OMap2D     // (unit, colBy) -> Cell
+	var rowDists []*OMap // phaseCfg -> *Distribution
+	for _, unitCfg := range measurements.Rows {
+		rowDists = rowDists[:0]
+		for _, colCfg := range measurements.Cols {
+			if phases, ok := measurements.LoadOK(unitCfg, colCfg); ok {
+				dists := phases.(*OMap).Map(func(key *benchproc.Config, val interface{}) interface{} {
+					return benchstat.NewDistribution(val.([]float64), benchstat.DistributionOptions{})
+				})
+				rowDists = append(rowDists, dists)
+			}
+		}
+		rowCells := NewStacks(rowDists, units[unitCfg].class)
+		for _, colCfg := range measurements.Cols {
+			if _, ok := measurements.LoadOK(unitCfg, colCfg); ok {
+				cells.Store(unitCfg, colCfg, rowCells[0])
+				rowCells = rowCells[1:]
+			}
 		}
 	}
 
@@ -230,8 +232,7 @@ func main() {
 	for rowI, unitCfg := range cells.Rows {
 		top := topSpace + float64(rowI*(rowHeight+rowGap))
 
-		unit := unitCfg.Val()
-		unitInfo := units[unit]
+		unitInfo := units[unitCfg]
 
 		// Unit label
 		fmt.Fprintf(svg, `  <text font-size="%d" text-anchor="middle" transform="translate(%f %f) rotate(-90)">%s</text>`+"\n", unitFontSize, float64(unitFontSize), float64(top+rowHeight/2), unitInfo.tidyUnit)
@@ -275,8 +276,7 @@ func main() {
 
 		// Render key.
 		keyLeft, _ := x(len(cells.Cols))
-		row := rows[unitCfg]
-		keyRight, keyBot := row.RenderKey(svg, keyLeft, yScale, prev, prevRight)
+		keyRight, keyBot := prev.RenderKey(svg, keyLeft, yScale, prevRight)
 		if keyRight > maxRight {
 			maxRight = keyRight
 		}

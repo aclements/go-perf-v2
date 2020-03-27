@@ -74,6 +74,26 @@ func (m *OMap) Store(key *benchproc.Config, value interface{}) {
 	}
 }
 
+// Map applies f to every value in m and returns an OMap of its results.
+func (m *OMap) Map(f func(key *benchproc.Config, val interface{}) interface{}) *OMap {
+	copyPos := func(x map[*benchproc.Config]int) map[*benchproc.Config]int {
+		out := make(map[*benchproc.Config]int, len(x))
+		for k, v := range x {
+			out[k] = v
+		}
+		return out
+	}
+	out := &OMap{
+		Keys:   append([]*benchproc.Config(nil), m.Keys...),
+		KeyPos: copyPos(m.KeyPos),
+		vals:   make(map[*benchproc.Config]interface{}),
+	}
+	for k, v := range m.vals {
+		out.vals[k] = f(k, v)
+	}
+	return out
+}
+
 type OMap2D struct {
 	Rows, Cols []*benchproc.Config
 
@@ -124,10 +144,25 @@ func (m *OMap2D) Store(row, col *benchproc.Config, value interface{}) {
 	}
 }
 
-func (m *OMap2D) Map(f func(row, col *benchproc.Config, val interface{}) interface{}) {
-	for k, v := range m.cells {
-		m.cells[k] = f(k.a, k.b, v)
+func (m *OMap2D) Map(f func(row, col *benchproc.Config, val interface{}) interface{}) *OMap2D {
+	copyPos := func(x map[*benchproc.Config]int) map[*benchproc.Config]int {
+		out := make(map[*benchproc.Config]int, len(x))
+		for k, v := range x {
+			out[k] = v
+		}
+		return out
 	}
+	out := &OMap2D{
+		Rows:   append([]*benchproc.Config(nil), m.Rows...),
+		Cols:   append([]*benchproc.Config(nil), m.Cols...),
+		RowPos: copyPos(m.RowPos),
+		ColPos: copyPos(m.ColPos),
+		cells:  make(map[oMap2DKey]interface{}),
+	}
+	for k, v := range m.cells {
+		out.cells[k] = f(k.a, k.b, v)
+	}
+	return out
 }
 
 func (m *OMap2D) Sort(rowLess, colLess func(a, b *benchproc.Config) bool) {
