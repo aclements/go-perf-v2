@@ -73,12 +73,7 @@ func (r *Result) Clone() *Result {
 		FullName:   append([]byte(nil), r.FullName...),
 		Iters:      r.Iters,
 		Values:     append([]Value(nil), r.Values...),
-		configPos:  make(map[string]int),
 		permConfig: r.permConfig,
-	}
-	// Populate configPos.
-	for i, cfg := range r2.FileConfig {
-		r2.configPos[cfg.Key] = i
 	}
 	return r2
 }
@@ -87,10 +82,7 @@ func (r *Result) Clone() *Result {
 // adding the configuration as necessary. perm indicates that this is
 // a permanent config value that cannot be overridden by a file.
 func (r *Result) setFileConfig(key, value string, perm bool) {
-	if r.configPos == nil {
-		r.configPos = make(map[string]int)
-	}
-	pos, ok := r.configPos[key]
+	pos, ok := r.FileConfigIndex(key)
 	if ok {
 		if !perm && pos < r.permConfig {
 			// Cannot override permanent config.
@@ -112,6 +104,12 @@ func (r *Result) setFileConfig(key, value string, perm bool) {
 
 // FileConfigIndex returns the index in r.FileConfig of key.
 func (r *Result) FileConfigIndex(key string) (pos int, ok bool) {
+	if r.configPos == nil {
+		r.configPos = make(map[string]int)
+		for i, cfg := range r.FileConfig {
+			r.configPos[cfg.Key] = i
+		}
+	}
 	pos, ok = r.configPos[key]
 	return
 }
