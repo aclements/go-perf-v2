@@ -14,8 +14,6 @@ import (
 	"golang.org/x/perf/v2/benchunit"
 )
 
-// TODO: Include total at the bottom.
-
 // A Stack is a Cell that visualizes the cumulative sum of some phase metric.
 //
 // Each individual Stack has an independent sequence of phases, but
@@ -107,6 +105,8 @@ func NewStacks(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 func (s *Stack) Extents(ext *Extents) {
 	expandScale(&ext.X, 0, 1)
 	expandScale(&ext.Y, 0, s.sum)
+	// Leave room for the "total" at the bottom.
+	ext.Margins.Bottom = labelFontHeight
 }
 
 func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
@@ -135,6 +135,13 @@ func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
 		}
 	}
 
+	// Total
+	label := benchunit.Scale(s.sum, s.unitClass)
+	totalY := scales.Outer.Bottom - labelFontHeight + labelFontSize
+	fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" text-anchor="middle">%s</text>`+"\n", x.Map(0.5), totalY, labelFontSize, label)
+	if prev, ok := prev.(*Stack); ok {
+		fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" text-anchor="middle">%+.0f%%</text>`+"\n", mid(prevRight, scales.Outer.Left), totalY, labelFontSize, 100*(s.sum/prev.sum-1))
+	}
 }
 
 func (s *Stack) RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (right, bot float64) {
@@ -175,7 +182,7 @@ func (s *Stack) RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (r
 		in := intervals[i]
 		stroke := svg.PhaseColor(phaseCfg)
 		fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" dominant-baseline="central">%s</text>`+"\n", x+phaseFontSize/2, in.mid(), phaseFontSize, label)
-		fmt.Fprintf(svg, `  <path d="M%f %fC%f %f,%f %f,%f %f" stroke="%s" stroke-width="2px" />`+"\n",
+		fmt.Fprintf(svg, `  <path d="M%f %fC%f %f,%f %f,%f %f" stroke="%s" stroke-width="2px" fill="none" />`+"\n",
 			lastRight, mid(y.Map(phase.start), y.Map(phase.end)),
 			mid(x, lastRight), mid(y.Map(phase.start), y.Map(phase.end)),
 			mid(x, lastRight), in.mid(),

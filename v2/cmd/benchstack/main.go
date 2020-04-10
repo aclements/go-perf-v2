@@ -38,14 +38,23 @@ type Cell interface {
 	RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (right, bot float64)
 }
 
+type Box struct {
+	Top, Right, Bottom, Left float64
+}
+
 type Extents struct {
 	X, X2 scale.Linear
 	Y     scale.Linear
+
+	Margins Box
 }
 
 type Scales struct {
 	X, X2 scale.QQ
 	Y     scale.QQ
+
+	Outer   Box
+	Margins Box
 }
 
 func expandScale(s *scale.Linear, min, max float64) {
@@ -58,6 +67,7 @@ func expandScale(s *scale.Linear, min, max float64) {
 }
 
 const labelFontSize = 8
+const labelFontHeight = labelFontSize * 5 / 4
 
 type SVG struct {
 	w           io.Writer
@@ -244,12 +254,16 @@ func main() {
 		walkColTree(tree, 0, colI)
 		colI += tree.Width
 	}
-	bot := topSpace
+	maxBot := topSpace
 
 	// Rows
 	var maxRight float64
 	for rowI, unitCfg := range cells.Rows {
 		top := topSpace + float64(rowI*(rowHeight+rowGap))
+		bot := top + rowHeight
+		if bot > maxBot {
+			maxBot = bot
+		}
 
 		unitInfo := units[unitCfg]
 
@@ -266,11 +280,11 @@ func main() {
 			}
 			cell.Extents(&ext)
 		}
-		yOut := scale.Linear{Min: top, Max: top + rowHeight}
+		scales.Margins = ext.Margins
+		scales.Outer.Top = top
+		scales.Outer.Bottom = bot
+		yOut := scale.Linear{Min: top + ext.Margins.Top, Max: bot - ext.Margins.Bottom}
 		scales.Y = scale.QQ{&ext.Y, &yOut}
-		if yOut.Max > bot {
-			bot = yOut.Max
-		}
 
 		// Render cells.
 		var prev Cell
@@ -282,7 +296,9 @@ func main() {
 			}
 
 			l, r := x(i)
-			xOut := scale.Linear{Min: l, Max: r}
+			scales.Outer.Left = l
+			scales.Outer.Right = r
+			xOut := scale.Linear{Min: l + ext.Margins.Left, Max: r - ext.Margins.Right}
 			scales.X = scale.QQ{&ext.X, &xOut}
 			scales.X2 = scale.QQ{&ext.X2, &xOut}
 			cell.Render(svg, &scales, prev, prevRight)
@@ -295,8 +311,8 @@ func main() {
 		if keyRight > maxRight {
 			maxRight = keyRight
 		}
-		if keyBot > bot {
-			bot = keyBot
+		if keyBot > maxBot {
+			maxBot = keyBot
 		}
 	}
 
@@ -305,7 +321,7 @@ func main() {
 		`<svg version="1.1" width="%f" height="%f" xmlns="http://www.w3.org/2000/svg">
 %s</svg>`,
 		maxRight,
-		bot,
+		maxBot,
 		svgBuf.Bytes(),
 	)
 }
