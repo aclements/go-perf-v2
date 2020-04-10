@@ -150,12 +150,24 @@ func main() {
 			}
 
 			// TODO: Nicer filtering
-			if !strings.HasSuffix(string(res.FullName), "_GC") || string(res.FullName) == "TotalTime_GC" {
+			if !strings.HasSuffix(string(res.FullName), "_GC") {
 				continue
 			}
-			// if strings.HasSuffix(string(res.FullName), "_GC") || string(res.FullName) == "TotalTime" {
+			// if strings.HasSuffix(string(res.FullName), "_GC") {
 			// 	continue
 			// }
+
+			// Ignore total time benchmark.
+			if strings.HasPrefix(string(res.FullName), "TotalTime") {
+				continue
+			}
+
+			// Strip fake Loadlibfull phase from old linker.
+			if strings.HasPrefix(string(res.FullName), "Loadlibfull") {
+				if ns, ok := res.Value("ns/op"); ok && ns < 1000 {
+					continue
+				}
+			}
 
 			colCfg := colBy.Project(cs, res)
 			phaseCfg := phaseBy.Project(cs, res)
