@@ -14,11 +14,14 @@ import (
 	"golang.org/x/perf/v2/benchunit"
 )
 
-// A Stack visualizes the cumulative sum of some phase metric.
+// TODO: Include total at the bottom.
+
+// A Stack is a Cell that visualizes the cumulative sum of some phase metric.
 //
 // Each individual Stack has an independent sequence of phases, but
 // the changes within a phase are visualized across the row.
 type Stack struct {
+	row       *stackRow
 	unitClass benchunit.UnitClass
 
 	phases OMap // phase config -> stackPhase
@@ -34,21 +37,70 @@ func (p stackPhase) len() float64 {
 	return p.end - p.start
 }
 
+type stackRow struct {
+	phaseOrder []*benchproc.Config
+	topPhases  map[*benchproc.Config]bool
+}
+
 func NewStacks(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
+	// Collect phases and create cells.
+	row := &stackRow{}
 	cells := make([]Cell, len(dists))
+	phaseMaxes := make(map[*benchproc.Config]float64)
+	var maxSum float64
+	var phaseOrders [][]*benchproc.Config
 	for i, phases := range dists {
 		stack := &Stack{
+			row:       row,
 			unitClass: unitClass,
 		}
+		// Accumulate phases.
 		var csum float64
 		for _, phaseCfg := range phases.Keys {
 			dist := phases.Load(phaseCfg).(*benchstat.Distribution)
 			stack.phases.Store(phaseCfg, stackPhase{csum, csum + dist.Center})
 			csum += dist.Center
+
+			if dist.Center > phaseMaxes[phaseCfg] {
+				phaseMaxes[phaseCfg] = dist.Center
+			}
 		}
 		stack.sum = csum
+		if csum > maxSum {
+			maxSum = csum
+		}
+		phaseOrders = append(phaseOrders, phases.Keys)
+
 		cells[i] = stack
 	}
+
+	// Construct a global phase order.
+	row.phaseOrder = globalOrder(phaseOrders)
+
+	// Compute top N phases > 1%.
+	const maxTopPhases = 15
+	const minPhaseFrac = 0.01
+	var topPhases []*benchproc.Config
+	for cfg, max := range phaseMaxes {
+		if max >= maxSum*minPhaseFrac {
+			topPhases = append(topPhases, cfg)
+		}
+	}
+	// Get the top N phases.
+	sort.Slice(topPhases, func(i, j int) bool {
+		p1 := phaseMaxes[topPhases[i]]
+		p2 := phaseMaxes[topPhases[j]]
+		return p1 > p2
+	})
+	if len(topPhases) > maxTopPhases {
+		topPhases = topPhases[:maxTopPhases]
+	}
+	// Put back into a map.
+	row.topPhases = make(map[*benchproc.Config]bool)
+	for _, cfg := range topPhases {
+		row.topPhases[cfg] = true
+	}
+
 	return cells
 }
 
@@ -90,43 +142,35 @@ func (s *Stack) RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (r
 	const phaseFontHeight = phaseFontSize * 5 / 4
 	const phaseWidth = 150
 
-	// Label top N phases > 1% in right-most column.
-	const numPhases = 15
-	const minPhaseFrac = 0.01
+	// Create initial visual intervals. The last cell may not have
+	// all phases, so we follow the global phase order and figure
+	// out where missing phases would go.
+	var intervals []interval
 	var topPhases []*benchproc.Config
-	for _, cfg := range s.phases.Keys {
-		phase := s.phases.Load(cfg).(stackPhase)
-		if phase.len() < s.sum*minPhaseFrac {
-			continue
+	var phase stackPhase
+	for _, phaseCfg := range s.row.phaseOrder {
+		if phaseX, ok := s.phases.LoadOK(phaseCfg); ok {
+			phase = phaseX.(stackPhase)
+		} else {
+			phase.start = phase.end
 		}
-		topPhases = append(topPhases, cfg)
+		if s.row.topPhases[phaseCfg] {
+			mid := (y.Map(phase.start) + y.Map(phase.end)) / 2
+			in := interval{mid - phaseFontHeight/2, mid + phaseFontHeight/2}
+			intervals = append(intervals, in)
+			topPhases = append(topPhases, phaseCfg)
+		}
 	}
-	// Get the top N phases.
-	sort.Slice(topPhases, func(i, j int) bool {
-		p1 := s.phases.Load(topPhases[i]).(stackPhase)
-		p2 := s.phases.Load(topPhases[j]).(stackPhase)
-		return p1.len() > p2.len()
-	})
-	if len(topPhases) > numPhases {
-		topPhases = topPhases[:numPhases]
-	}
-	// Sort back into phase order.
-	sort.Slice(topPhases, func(i, j int) bool {
-		order := s.phases.KeyPos
-		return order[topPhases[i]] < order[topPhases[j]]
-	})
-	// Create initial visual intervals.
-	intervals := make([]interval, len(topPhases))
-	for i := range intervals {
-		phase := s.phases.Load(topPhases[i]).(stackPhase)
-		mid := (y.Map(phase.start) + y.Map(phase.end)) / 2
-		intervals[i] = interval{mid - phaseFontHeight/2, mid + phaseFontHeight/2}
-	}
+
 	// Slide intervals to remove overlaps.
 	removeIntervalOverlaps(intervals)
 	// Emit labels
 	for i, phaseCfg := range topPhases {
-		phase := s.phases.Load(phaseCfg).(stackPhase)
+		if phaseX, ok := s.phases.LoadOK(phaseCfg); ok {
+			phase = phaseX.(stackPhase)
+		} else {
+			phase.start = phase.end
+		}
 		label := phaseCfg.Val()
 		in := intervals[i]
 		stroke := svg.PhaseColor(phaseCfg)
