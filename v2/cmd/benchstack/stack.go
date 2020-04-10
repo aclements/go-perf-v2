@@ -65,7 +65,7 @@ func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
 		title := phaseCfg.Val()
 
 		// Draw rectangle for this phase.
-		path := fmt.Sprintf("M%f %fH%fV%fH%fz", x.Map(0), y.Map(phase.start), x.Map(1), y.Map(phase.end), x.Map(0))
+		path := svgPathRect(x.Map(0), y.Map(phase.start), x.Map(1), y.Map(phase.end))
 		fmt.Fprintf(svg, `  <path d="%s" fill="%s"><title>%s (%s)</title></path>`+"\n", path, fill, title, benchunit.Scale(phase.len(), s.unitClass))
 
 		// Phase label.

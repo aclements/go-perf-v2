@@ -315,15 +315,16 @@ func mid(a, b float64) float64 {
 }
 
 func svgColor(c color.Color) string {
-	switch c := c.(type) {
-	case color.RGBA:
-		if c.A == 255 {
-			return fmt.Sprintf("rgb(%d,%d,%d)", c.R, c.G, c.B)
-		} else {
-			return fmt.Sprintf("rgba(%d,%d,%d,%f)", c.R, c.G, c.B, float64(c.A)/256)
-		}
+	c2 := color.NRGBAModel.Convert(c).(color.NRGBA)
+	if c2.A == 255 {
+		return fmt.Sprintf("rgb(%d,%d,%d)", c2.R, c2.G, c2.B)
+	} else {
+		return fmt.Sprintf("rgba(%d,%d,%d,%f)", c2.R, c2.G, c2.B, float64(c2.A)/255)
 	}
-	panic("not implemented")
+}
+
+func svgPathRect(x1, y1, x2, y2 float64) string {
+	return fmt.Sprintf("M%f %fH%fV%fH%fz", x1, y1, x2, y2, x1)
 }
 
 type interval struct {
