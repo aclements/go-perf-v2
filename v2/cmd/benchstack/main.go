@@ -28,14 +28,17 @@ var Accent_8 = []color.Color{color.RGBA{127, 201, 127, 255}, color.RGBA{190, 174
 var Dark2_8 = []color.Color{color.RGBA{27, 158, 119, 255}, color.RGBA{217, 95, 2, 255}, color.RGBA{117, 112, 179, 255}, color.RGBA{231, 41, 138, 255}, color.RGBA{102, 166, 30, 255}, color.RGBA{230, 171, 2, 255}, color.RGBA{166, 118, 29, 255}, color.RGBA{102, 102, 102, 255}}
 var Set1_9 = []color.Color{color.RGBA{228, 26, 28, 255}, color.RGBA{55, 126, 184, 255}, color.RGBA{77, 175, 74, 255}, color.RGBA{152, 78, 163, 255}, color.RGBA{255, 127, 0, 255}, color.RGBA{255, 255, 51, 255}, color.RGBA{166, 86, 40, 255}, color.RGBA{247, 129, 191, 255}, color.RGBA{153, 153, 153, 255}}
 
-var pal = Set1_9
+var (
+	topPal   = Dark2_8[:len(Dark2_8)-2]
+	otherPal = Dark2_8[len(Dark2_8)-2:]
+)
 
 // A Cell captures data from a sequence of phases in a given benchmark
 // configuration.
 type Cell interface {
 	Extents(*Extents)
 	Render(svg *SVG, scales *Scales, prev Cell, prevRight float64)
-	RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (right, bot float64)
+	RenderKey(svg *SVG, x float64, lastScales *Scales) (right, bot float64)
 }
 
 type Box struct {
@@ -47,6 +50,11 @@ type Extents struct {
 	Y     scale.Linear
 
 	Margins Box
+
+	// TopPhases and OtherPhases are graphs of visually adjacent
+	// phase configurations. These graphs are colored to determine
+	// phase colors.
+	TopPhases, OtherPhases ConfigGraph
 }
 
 type Scales struct {
@@ -55,6 +63,10 @@ type Scales struct {
 
 	Outer   Box
 	Margins Box
+
+	// Colors assigns colors to phases based on the adjacent phase
+	// graph.
+	Colors map[*benchproc.Config]color.Color
 }
 
 func expandScale(s *scale.Linear, min, max float64) {
@@ -70,17 +82,12 @@ const labelFontSize = 8
 const labelFontHeight = labelFontSize * 5 / 4
 
 type SVG struct {
-	w           io.Writer
-	phaseColors OMap
-	gen         int
+	w   io.Writer
+	gen int
 }
 
 func (s *SVG) Write(x []byte) (int, error) {
 	return s.w.Write(x)
-}
-
-func (s *SVG) PhaseColor(phaseCfg *benchproc.Config) string {
-	return svgColor(s.phaseColors.Load(phaseCfg).(color.Color))
 }
 
 func (s *SVG) GenID(prefix string) string {
@@ -113,8 +120,6 @@ func main() {
 	}
 	colBy := colBys[0]
 	phaseBy := &benchproc.ProjectFullName{}
-
-	var phaseColors OMap // phase config -> color.Color
 
 	// XXX Take this as an argument?
 	units := make(map[*benchproc.Config]unitInfo) // unit config
@@ -172,11 +177,6 @@ func main() {
 			colCfg := colBy.Project(cs, res)
 			phaseCfg := phaseBy.Project(cs, res)
 
-			// Assign colors to phases.
-			if phaseColors.Load(phaseCfg) == nil {
-				phaseColors.Store(phaseCfg, pal[len(phaseColors.Keys)%len(pal)])
-			}
-
 			for _, value := range res.Values {
 				unitCfg := cs.KeyVal(".unit", value.Unit)
 				unitInfo, ok := units[unitCfg]
@@ -224,7 +224,7 @@ func main() {
 
 	// Emit SVG
 	svgBuf := new(bytes.Buffer)
-	svg := &SVG{w: svgBuf, phaseColors: phaseColors}
+	svg := &SVG{w: svgBuf}
 	const unitFontSize = 12
 	const unitFontHeight = 12 * 5 / 4
 	const colWidth = 100
@@ -298,6 +298,11 @@ func main() {
 		yOut := scale.Linear{Min: top + ext.Margins.Top, Max: bot - ext.Margins.Bottom}
 		scales.Y = scale.QQ{&ext.Y, &yOut}
 
+		// Color phases.
+		scales.Colors = make(map[*benchproc.Config]color.Color)
+		assignColors(scales.Colors, &ext.TopPhases, topPal)
+		assignColors(scales.Colors, &ext.OtherPhases, otherPal)
+
 		// Render cells.
 		var prev Cell
 		var prevRight float64
@@ -319,7 +324,7 @@ func main() {
 
 		// Render key.
 		keyLeft, _ := x(len(cells.Cols))
-		keyRight, keyBot := prev.RenderKey(svg, keyLeft, scales.Y, prevRight)
+		keyRight, keyBot := prev.RenderKey(svg, keyLeft, &scales)
 		if keyRight > maxRight {
 			maxRight = keyRight
 		}
@@ -338,6 +343,12 @@ func main() {
 	)
 }
 
+func assignColors(out map[*benchproc.Config]color.Color, g *ConfigGraph, pal []color.Color) {
+	for cfg, idx := range g.Color(len(pal)) {
+		out[cfg] = pal[idx%len(pal)]
+	}
+}
+
 func mid(a, b float64) float64 {
 	return (a + b) / 2
 }
@@ -353,6 +364,26 @@ func svgColor(c color.Color) string {
 
 func svgPathRect(x1, y1, x2, y2 float64) string {
 	return fmt.Sprintf("M%f %fH%fV%fH%fz", x1, y1, x2, y2, x1)
+}
+
+func colorBlend(a, b color.Color, by float64) color.Color {
+	x := color.NRGBA64Model.Convert(a).(color.NRGBA64)
+	y := color.NRGBA64Model.Convert(b).(color.NRGBA64)
+	blend := func(x, y uint16) uint16 {
+		z := int32(0.5 + float64(x)*(1-by) + float64(y)*by)
+		if z <= 0 {
+			return 0
+		} else if z >= 0xffff {
+			return 0xffff
+		}
+		return uint16(z)
+	}
+	return color.NRGBA64{
+		blend(x.R, y.R),
+		blend(x.G, y.G),
+		blend(x.B, y.B),
+		blend(x.A, y.A),
+	}
 }
 
 type interval struct {

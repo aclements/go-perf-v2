@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/aclements/go-moremath/scale"
 	"golang.org/x/perf/v2/benchproc"
 	"golang.org/x/perf/v2/benchstat"
 	"golang.org/x/perf/v2/benchunit"
@@ -107,13 +106,26 @@ func (s *Stack) Extents(ext *Extents) {
 	expandScale(&ext.Y, 0, s.sum)
 	// Leave room for the "total" at the bottom.
 	ext.Margins.Bottom = labelFontHeight
+	// Add phases for phase coloring.
+	var prevTop, prevOther *benchproc.Config
+	for _, phaseCfg := range s.phases.Keys {
+		if s.row.topPhases[phaseCfg] {
+			ext.TopPhases.Add(prevTop, phaseCfg)
+			// This top phase separates "other" phases, so
+			// set prevOther to nil.
+			prevTop, prevOther = phaseCfg, nil
+		} else {
+			ext.OtherPhases.Add(prevOther, phaseCfg)
+			prevOther = phaseCfg
+		}
+	}
 }
 
 func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
 	x, y := scales.X, scales.Y
 	for _, phaseCfg := range s.phases.Keys {
 		phase := s.phases.Load(phaseCfg).(stackPhase)
-		fill := svg.PhaseColor(phaseCfg)
+		fill := svgColor(scales.Colors[phaseCfg])
 		title := phaseCfg.Val()
 
 		// Draw rectangle for this phase.
@@ -151,10 +163,13 @@ func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
 	}
 }
 
-func (s *Stack) RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (right, bot float64) {
+func (s *Stack) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, bot float64) {
 	const phaseFontSize = 12
 	const phaseFontHeight = phaseFontSize * 5 / 4
 	const phaseWidth = 150
+
+	y := lastScales.Y
+	lastRight := lastScales.Outer.Right
 
 	// Create initial visual intervals. The last cell may not have
 	// all phases, so we follow the global phase order and figure
@@ -187,7 +202,7 @@ func (s *Stack) RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (r
 		}
 		label := phaseCfg.Val()
 		in := intervals[i]
-		stroke := svg.PhaseColor(phaseCfg)
+		stroke := svgColor(lastScales.Colors[phaseCfg])
 		fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" dominant-baseline="central">%s</text>`+"\n", x+phaseFontSize/2, in.mid(), phaseFontSize, label)
 		fmt.Fprintf(svg, `  <path d="M%f %fC%f %f,%f %f,%f %f" stroke="%s" stroke-width="2px" fill="none" />`+"\n",
 			lastRight, mid(y.Map(phase.start), y.Map(phase.end)),
