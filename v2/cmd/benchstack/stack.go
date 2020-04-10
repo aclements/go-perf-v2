@@ -131,7 +131,14 @@ func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
 			if !ok {
 				continue
 			}
-			fmt.Fprintf(svg, `  <path d="M%f %fL%f %fV%fL%f %fz" fill="%s" fill-opacity="0.5" />`+"\n", prevRight, y.Map(phase0.start), x.Map(0), y.Map(phase.start), y.Map(phase.end), prevRight, y.Map(phase0.end), fill)
+			path := fmt.Sprintf("M%f %fL%f %fV%fL%f %fz", prevRight, y.Map(phase0.start), x.Map(0), y.Map(phase.start), y.Map(phase.end), prevRight, y.Map(phase0.end))
+			fmt.Fprintf(svg, `  <path d="%s" fill="%s" fill-opacity="0.5" />`+"\n", path, fill)
+			// Delta label.
+			clipID := svg.GenID("clip")
+			fmt.Fprintf(svg, `  <clipPath id="%s"><path d="%s" /></clipPath>`+"\n", clipID, path)
+			x := mid(prevRight, scales.Outer.Left)
+			y := (y.Map(phase0.start) + y.Map(phase0.end) + y.Map(phase.start) + y.Map(phase.end)) / 4
+			fmt.Fprintf(svg, `  <text x="%f" y="%f" clip-path="url(#%s)" font-size="%d" text-anchor="middle" dy=".4em">%+.0f%%</text>`+"\n", x, y, clipID, labelFontSize, 100*(phase.len()/phase0.len()-1))
 		}
 	}
 
