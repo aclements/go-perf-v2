@@ -13,6 +13,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/aclements/go-moremath/scale"
@@ -81,6 +82,10 @@ func expandScale(s *scale.Linear, min, max float64) {
 const labelFontSize = 8
 const labelFontHeight = labelFontSize * 5 / 4
 
+const keyFontSize = 12
+const keyFontHeight = keyFontSize * 5 / 4
+const keyWidth = 150
+
 type SVG struct {
 	w   io.Writer
 	gen int
@@ -101,6 +106,7 @@ type unitInfo struct {
 	tidyUnit   string
 	tidyFactor float64
 	class      benchunit.UnitClass
+	newCells   func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
 }
 
 func main() {
@@ -124,11 +130,18 @@ func main() {
 	// XXX Take this as an argument?
 	units := make(map[*benchproc.Config]unitInfo) // unit config
 	var tidier benchunit.Tidier
-	for _, unit := range []string{"ns/op", "B/op"} {
+	for _, unit := range []string{"ns/op" /*, "B/op"*/, "live-B", "heap-B"} {
 		cfg := cs.KeyVal(".unit", unit)
 		tidyUnit, tidyFactor := tidier.Tidy(unit)
 		unitClass := benchunit.UnitClassOf(tidyUnit)
-		units[cfg] = unitInfo{cfg, tidyUnit, tidyFactor, unitClass}
+		var newCells func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
+		switch unit {
+		case "ns/op", "B/op":
+			newCells = NewStacks
+		case "live-B", "heap-B":
+			newCells = NewDeltaCells
+		}
+		units[cfg] = unitInfo{cfg, tidyUnit, tidyFactor, unitClass, newCells}
 	}
 
 	// Parse measurements into cells.
@@ -213,7 +226,7 @@ func main() {
 				rowDists = append(rowDists, dists)
 			}
 		}
-		rowCells := NewStacks(rowDists, units[unitCfg].class)
+		rowCells := units[unitCfg].newCells(rowDists, units[unitCfg].class)
 		for _, colCfg := range measurements.Cols {
 			if _, ok := measurements.LoadOK(unitCfg, colCfg); ok {
 				cells.Store(unitCfg, colCfg, rowCells[0])
@@ -228,7 +241,7 @@ func main() {
 	const unitFontSize = 12
 	const unitFontHeight = 12 * 5 / 4
 	const colWidth = 100
-	const colSpace = 50
+	const colSpace = 25
 	const colFontSize = 12
 	const colFontHeight = 12 * 5 / 4
 	const rowHeight = 300
@@ -366,6 +379,14 @@ func svgPathRect(x1, y1, x2, y2 float64) string {
 	return fmt.Sprintf("M%f %fH%fV%fH%fz", x1, y1, x2, y2, x1)
 }
 
+func svgPathHSquiggle(x1, y1, x2, y2 float64) string {
+	return fmt.Sprintf("M%f %fC%f %f,%f %f,%f %f",
+		x1, y1,
+		mid(x1, x2), y1,
+		mid(x1, x2), y2,
+		x2, y2)
+}
+
 func colorBlend(a, b color.Color, by float64) color.Color {
 	x := color.NRGBA64Model.Convert(a).(color.NRGBA64)
 	y := color.NRGBA64Model.Convert(b).(color.NRGBA64)
@@ -388,6 +409,7 @@ func colorBlend(a, b color.Color, by float64) color.Color {
 
 type interval struct {
 	start, end float64
+	data       interface{}
 }
 
 func (in interval) mid() float64 {
@@ -395,6 +417,10 @@ func (in interval) mid() float64 {
 }
 
 func removeIntervalOverlaps(ints []interval) {
+	sort.Slice(ints, func(i, j int) bool {
+		return ints[i].mid() < ints[j].mid()
+	})
+
 	nints := make([]interval, len(ints))
 	copy(nints, ints)
 
@@ -442,7 +468,7 @@ func removeIntervalOverlaps(ints []interval) {
 			pos := mid - height/2
 			for i := range super {
 				h := orig[i].end - orig[i].start
-				super[i] = interval{pos, pos + h}
+				super[i] = interval{pos, pos + h, orig[i].data}
 				pos += h
 			}
 		}

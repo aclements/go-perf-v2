@@ -164,10 +164,6 @@ func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
 }
 
 func (s *Stack) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, bot float64) {
-	const phaseFontSize = 12
-	const phaseFontHeight = phaseFontSize * 5 / 4
-	const phaseWidth = 150
-
 	y := lastScales.Y
 	lastRight := lastScales.Outer.Right
 
@@ -175,7 +171,6 @@ func (s *Stack) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, bot f
 	// all phases, so we follow the global phase order and figure
 	// out where missing phases would go.
 	var intervals []interval
-	var topPhases []*benchproc.Config
 	var phase stackPhase
 	for _, phaseCfg := range s.row.phaseOrder {
 		if phaseX, ok := s.phases.LoadOK(phaseCfg); ok {
@@ -185,36 +180,35 @@ func (s *Stack) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, bot f
 		}
 		if s.row.topPhases[phaseCfg] {
 			mid := (y.Map(phase.start) + y.Map(phase.end)) / 2
-			in := interval{mid - phaseFontHeight/2, mid + phaseFontHeight/2}
+			in := interval{mid - keyFontHeight/2, mid + keyFontHeight/2, phaseCfg}
 			intervals = append(intervals, in)
-			topPhases = append(topPhases, phaseCfg)
 		}
 	}
 
 	// Slide intervals to remove overlaps.
 	removeIntervalOverlaps(intervals)
 	// Emit labels
-	for i, phaseCfg := range topPhases {
+	for _, in := range intervals {
+		phaseCfg := in.data.(*benchproc.Config)
 		if phaseX, ok := s.phases.LoadOK(phaseCfg); ok {
 			phase = phaseX.(stackPhase)
 		} else {
 			phase.start = phase.end
 		}
 		label := phaseCfg.Val()
-		in := intervals[i]
 		stroke := svgColor(lastScales.Colors[phaseCfg])
-		fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" dominant-baseline="central">%s</text>`+"\n", x+phaseFontSize/2, in.mid(), phaseFontSize, label)
-		fmt.Fprintf(svg, `  <path d="M%f %fC%f %f,%f %f,%f %f" stroke="%s" stroke-width="2px" fill="none" />`+"\n",
-			lastRight, mid(y.Map(phase.start), y.Map(phase.end)),
-			mid(x, lastRight), mid(y.Map(phase.start), y.Map(phase.end)),
-			mid(x, lastRight), in.mid(),
-			x, in.mid(),
+		fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" dominant-baseline="central">%s</text>`+"\n", x+keyFontSize/2, in.mid(), keyFontSize, label)
+		fmt.Fprintf(svg, `  <path d="%s" stroke="%s" stroke-width="2px" fill="none" />`+"\n",
+			svgPathHSquiggle(
+				lastRight, mid(y.Map(phase.start), y.Map(phase.end)),
+				x, in.mid(),
+			),
 			stroke)
 		if in.end > bot {
 			bot = in.end
 		}
 	}
-	right = x + phaseWidth
+	right = x + keyWidth
 
 	return
 }
