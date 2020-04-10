@@ -52,11 +52,13 @@ func NewStacks(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 	return cells
 }
 
-func (s *Stack) Extent() (xmin, xmax, ymin, ymax float64) {
-	return 0, 1, 0, s.sum
+func (s *Stack) Extents(ext *Extents) {
+	expandScale(&ext.X, 0, 1)
+	expandScale(&ext.Y, 0, s.sum)
 }
 
-func (s *Stack) Render(svg *SVG, x, y scale.QQ, prev Cell, prevRight float64) {
+func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
+	x, y := scales.X, scales.Y
 	for _, phaseCfg := range s.phases.Keys {
 		phase := s.phases.Load(phaseCfg).(stackPhase)
 		fill := svg.PhaseColor(phaseCfg)

@@ -33,9 +33,28 @@ var pal = Set1_9
 // A Cell captures data from a sequence of phases in a given benchmark
 // configuration.
 type Cell interface {
-	Extent() (xmin, xmax, ymin, ymax float64)
-	Render(svg *SVG, x, y scale.QQ, prev Cell, prevRight float64)
+	Extents(*Extents)
+	Render(svg *SVG, scales *Scales, prev Cell, prevRight float64)
 	RenderKey(svg *SVG, x float64, y scale.QQ, lastRight float64) (right, bot float64)
+}
+
+type Extents struct {
+	X, X2 scale.Linear
+	Y     scale.Linear
+}
+
+type Scales struct {
+	X, X2 scale.QQ
+	Y     scale.QQ
+}
+
+func expandScale(s *scale.Linear, min, max float64) {
+	if s.Min == 0 && s.Max == 0 {
+		s.Min, s.Max = min, max
+	} else {
+		s.Min = math.Min(s.Min, min)
+		s.Max = math.Max(s.Max, max)
+	}
 }
 
 const labelFontSize = 8
@@ -237,24 +256,18 @@ func main() {
 		// Unit label
 		fmt.Fprintf(svg, `  <text font-size="%d" text-anchor="middle" transform="translate(%f %f) rotate(-90)">%s</text>`+"\n", unitFontSize, float64(unitFontSize), float64(top+rowHeight/2), unitInfo.tidyUnit)
 
-		// Construct X and Y scalers for this row.
-		var xIn, yIn scale.Linear
-		for i, colCfg := range cells.Cols {
+		// Construct scalers for this row.
+		var ext Extents
+		var scales Scales
+		for _, colCfg := range cells.Cols {
 			cell := cells.Load(unitCfg, colCfg).(Cell)
 			if cell == nil {
 				continue
 			}
-			xmin, xmax, ymin, ymax := cell.Extent()
-			if i == 0 {
-				xIn.Min, xIn.Max = xmin, xmax
-				yIn.Min, yIn.Max = ymin, ymax
-			} else {
-				xIn.Min, xIn.Max = math.Min(xIn.Min, xmin), math.Max(xIn.Max, xmax)
-				yIn.Min, yIn.Max = math.Min(yIn.Min, ymin), math.Max(yIn.Max, ymax)
-			}
+			cell.Extents(&ext)
 		}
 		yOut := scale.Linear{Min: top, Max: top + rowHeight}
-		yScale := scale.QQ{&yIn, &yOut}
+		scales.Y = scale.QQ{&ext.Y, &yOut}
 		if yOut.Max > bot {
 			bot = yOut.Max
 		}
@@ -269,14 +282,16 @@ func main() {
 			}
 
 			l, r := x(i)
-			xScale := scale.QQ{&xIn, &scale.Linear{Min: l, Max: r}}
-			cell.Render(svg, xScale, yScale, prev, prevRight)
+			xOut := scale.Linear{Min: l, Max: r}
+			scales.X = scale.QQ{&ext.X, &xOut}
+			scales.X2 = scale.QQ{&ext.X2, &xOut}
+			cell.Render(svg, &scales, prev, prevRight)
 			prev, prevRight = cell, r
 		}
 
 		// Render key.
 		keyLeft, _ := x(len(cells.Cols))
-		keyRight, keyBot := prev.RenderKey(svg, keyLeft, yScale, prevRight)
+		keyRight, keyBot := prev.RenderKey(svg, keyLeft, scales.Y, prevRight)
 		if keyRight > maxRight {
 			maxRight = keyRight
 		}
