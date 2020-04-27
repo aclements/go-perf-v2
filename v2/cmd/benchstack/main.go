@@ -241,7 +241,7 @@ func main() {
 	const unitFontSize = 12
 	const unitFontHeight = 12 * 5 / 4
 	const colWidth = 100
-	const colSpace = 25
+	const colSpace = 30 // Enough for "-100%"
 	const colFontSize = 12
 	const colFontHeight = 12 * 5 / 4
 	const rowHeight = 300
