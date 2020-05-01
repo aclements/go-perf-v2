@@ -109,9 +109,25 @@ type unitInfo struct {
 	newCells   func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
 }
 
+type projectKind struct{}
+
+var gcSuffix = []byte("_GC")
+
+func (projectKind) Project(cs *benchproc.ConfigSet, res *benchfmt.Result) *benchproc.Config {
+	baseName, _ := res.NameParts()
+	if bytes.HasSuffix(baseName, gcSuffix) {
+		return cs.KeyVal(".kind", "mem")
+	}
+	return cs.KeyVal(".kind", "cpu")
+}
+
+func (projectKind) AppendStaticKeys(keys []string) []string {
+	return append(keys, ".kind")
+}
+
 func main() {
 	flagCol := flag.String("col", "branch,commit-date", "split columns by distinct values of `projection`")
-	flagRow := flag.String("row", "benchmark", "split rows by distinct values of `projection`")
+	flagRow := flag.String("row", "benchmark,.kind", "split rows by distinct values of `projection`")
 	flag.Parse()
 	if flag.NArg() == 0 {
 		flag.Usage()
@@ -120,7 +136,14 @@ func main() {
 
 	cs := new(benchproc.ConfigSet)
 
-	groupBys, err := benchproc.ParseProjectionBundle([]string{*flagCol, *flagRow}, benchproc.ParseOpts{})
+	parseOpts := benchproc.ParseOpts{
+		Special: map[string]func() benchproc.Projection{
+			".kind": func() benchproc.Projection {
+				return projectKind{}
+			},
+		},
+	}
+	groupBys, err := benchproc.ParseProjectionBundle([]string{*flagCol, *flagRow}, parseOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parsing -col and -row: %s", err)
 		os.Exit(1)
@@ -168,13 +191,12 @@ func main() {
 				continue
 			}
 
-			// TODO: Nicer filtering
 			// if !strings.HasSuffix(string(res.FullName), "_GC") {
 			// 	continue
 			// }
-			if strings.HasSuffix(string(res.FullName), "_GC") {
-				continue
-			}
+			// if strings.HasSuffix(string(res.FullName), "_GC") {
+			// 	continue
+			// }
 
 			// Ignore total time benchmark.
 			if strings.HasPrefix(string(res.FullName), "TotalTime") {
