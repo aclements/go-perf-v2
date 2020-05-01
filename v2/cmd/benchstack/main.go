@@ -110,7 +110,8 @@ type unitInfo struct {
 }
 
 func main() {
-	flagCol := flag.String("col", "benchmark,branch,commit-date", "split columns by distinct values of `projection`")
+	flagCol := flag.String("col", "branch,commit-date", "split columns by distinct values of `projection`")
+	flagRow := flag.String("row", "benchmark", "split rows by distinct values of `projection`")
 	flag.Parse()
 	if flag.NArg() == 0 {
 		flag.Usage()
@@ -119,20 +120,20 @@ func main() {
 
 	cs := new(benchproc.ConfigSet)
 
-	colBys, err := benchproc.ParseProjectionBundle([]string{*flagCol}, benchproc.ParseOpts{})
+	groupBys, err := benchproc.ParseProjectionBundle([]string{*flagCol, *flagRow}, benchproc.ParseOpts{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parsing -col: %s", err)
+		fmt.Fprintf(os.Stderr, "parsing -col and -row: %s", err)
 		os.Exit(1)
 	}
-	colBy := colBys[0]
+	colBy, rowBy := groupBys[0], groupBys[1]
 	phaseBy := &benchproc.ProjectFullName{}
 
 	// XXX Take this as an argument?
 	units := make(map[*benchproc.Config]unitInfo) // unit config
 	var tidier benchunit.Tidier
-	for _, unit := range []string{"ns/op" /*, "B/op"*/, "live-B", "heap-B"} {
-		cfg := cs.KeyVal(".unit", unit)
+	for _, unit := range []string{"ns/op", "B/op", "live-B", "heap-B"} {
 		tidyUnit, tidyFactor := tidier.Tidy(unit)
+		cfg := cs.KeyVal(".unit", tidyUnit)
 		unitClass := benchunit.UnitClassOf(tidyUnit)
 		var newCells func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
 		switch unit {
@@ -145,7 +146,7 @@ func main() {
 	}
 
 	// Parse measurements into cells.
-	var measurements OMap2D // (unit, colBy) -> *OMap<phaseCfg -> []float64>
+	var measurements OMap2D // ((rowBy, unit), colBy) -> *OMap<phaseCfg -> []float64>
 	measurements.New = func(row, col *benchproc.Config) interface{} {
 		return &OMap{
 			New: func(key *benchproc.Config) interface{} {
@@ -168,12 +169,12 @@ func main() {
 			}
 
 			// TODO: Nicer filtering
-			if !strings.HasSuffix(string(res.FullName), "_GC") {
-				continue
-			}
-			// if strings.HasSuffix(string(res.FullName), "_GC") {
+			// if !strings.HasSuffix(string(res.FullName), "_GC") {
 			// 	continue
 			// }
+			if strings.HasSuffix(string(res.FullName), "_GC") {
+				continue
+			}
 
 			// Ignore total time benchmark.
 			if strings.HasPrefix(string(res.FullName), "TotalTime") {
@@ -188,17 +189,21 @@ func main() {
 			}
 
 			colCfg := colBy.Project(cs, res)
+			rowCfg := rowBy.Project(cs, res)
 			phaseCfg := phaseBy.Project(cs, res)
 
 			for _, value := range res.Values {
-				unitCfg := cs.KeyVal(".unit", value.Unit)
-				unitInfo, ok := units[unitCfg]
-				if !ok {
+				unit, tidyFactor := tidier.Tidy(value.Unit)
+				unitCfg := cs.KeyVal(".unit", unit)
+				if _, ok := units[unitCfg]; !ok {
+					// Ignored unit.
 					continue
 				}
-				val := value.Value * unitInfo.tidyFactor
+				val := value.Value * tidyFactor
 
-				cell := measurements.LoadOrNew(unitCfg, colCfg).(*OMap)
+				rowCfg2 := cs.Tuple(rowCfg, unitCfg)
+
+				cell := measurements.LoadOrNew(rowCfg2, colCfg).(*OMap)
 				vals := cell.LoadOrNew(phaseCfg).([]float64)
 				cell.Store(phaseCfg, append(vals, val))
 			}
@@ -214,12 +219,13 @@ func main() {
 	}
 
 	// Transform distributions into cells by row.
-	var cells OMap2D     // (unit, colBy) -> Cell
+	var cells OMap2D     // ((rowBy, unit), colBy) -> Cell
 	var rowDists []*OMap // phaseCfg -> *Distribution
-	for _, unitCfg := range measurements.Rows {
+	for _, rowCfg := range measurements.Rows {
+		_, unitCfg := rowCfg.PrefixLast()
 		rowDists = rowDists[:0]
 		for _, colCfg := range measurements.Cols {
-			if phases, ok := measurements.LoadOK(unitCfg, colCfg); ok {
+			if phases, ok := measurements.LoadOK(rowCfg, colCfg); ok {
 				dists := phases.(*OMap).Map(func(key *benchproc.Config, val interface{}) interface{} {
 					return benchstat.NewDistribution(val.([]float64), benchstat.DistributionOptions{})
 				})
@@ -228,8 +234,8 @@ func main() {
 		}
 		rowCells := units[unitCfg].newCells(rowDists, units[unitCfg].class)
 		for _, colCfg := range measurements.Cols {
-			if _, ok := measurements.LoadOK(unitCfg, colCfg); ok {
-				cells.Store(unitCfg, colCfg, rowCells[0])
+			if _, ok := measurements.LoadOK(rowCfg, colCfg); ok {
+				cells.Store(rowCfg, colCfg, rowCells[0])
 				rowCells = rowCells[1:]
 			}
 		}
@@ -238,68 +244,80 @@ func main() {
 	// Emit SVG
 	svgBuf := new(bytes.Buffer)
 	svg := &SVG{w: svgBuf}
-	const unitFontSize = 12
-	const unitFontHeight = 12 * 5 / 4
+	const configFontSize float64 = 12
+	const configFontHeight = configFontSize * 5 / 4
 	const colWidth = 100
 	const colSpace = 30 // Enough for "-100%"
-	const colFontSize = 12
-	const colFontHeight = 12 * 5 / 4
 	const rowHeight = 300
 	const rowGap = 10
+
+	// Column and row labels
+	rowTree, rowKeys := benchproc.NewConfigTree(cells.Rows)
+	colTree, colKeys := benchproc.NewConfigTree(cells.Cols)
+	cellTop := float64(len(colKeys)) * configFontHeight
+	cellLeft := float64(len(rowKeys)) * configFontHeight
 	x := func(col int) (float64, float64) {
-		l := unitFontHeight + col*(colWidth+colSpace)
-		return float64(l), float64(l + colWidth)
+		l := cellLeft + float64(col)*(colWidth+colSpace)
+		return l, l + colWidth
+	}
+	y := func(row int) (float64, float64) {
+		t := cellTop + float64(row)*(rowHeight+rowGap)
+		return t, t + rowHeight
 	}
 
-	// Column labels
-	var topSpace float64
-	colTree, _ := benchproc.NewConfigTree(cells.Cols)
-	var walkColTree func(tree *benchproc.ConfigTree, rowI, colI int)
-	walkColTree = func(tree *benchproc.ConfigTree, rowI, colI int) {
-		if tree.Config != nil {
-			l, _ := x(colI)
-			_, r := x(colI + tree.Width - 1)
-			label := tree.Config.Val()
-			fmt.Fprintf(svg, `  <text x="%f" y="%d" font-size="%d" text-anchor="middle">%s</text>`+"\n", (l+r)/2, rowI*colFontHeight+colFontSize, colFontSize, label)
-			// Emit grouping bar (except at the bottom)
-			if tree.Children != nil {
-				fmt.Fprintf(svg, `  <path d="M%f %fH%f" stroke="black" stroke-width="1px" />`+"\n", l, float64(rowI+1)*colFontHeight, r)
+	var walkColTree func(tree []*benchproc.ConfigTree, rowI, colI int)
+	walkColTree = func(trees []*benchproc.ConfigTree, rowI, colI int) {
+		for _, tree := range trees {
+			if tree.Config != nil {
+				l, _ := x(colI)
+				_, r := x(colI + tree.Width - 1)
+				label := tree.Config.Val()
+				fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%f" text-anchor="middle">%s</text>`+"\n", (l+r)/2, float64(rowI)*configFontHeight+configFontSize, configFontSize, label)
+				// Emit grouping bar (except at the bottom)
+				if tree.Children != nil {
+					fmt.Fprintf(svg, `  <path d="M%f %fH%f" stroke="black" stroke-width="1px" />`+"\n", l, float64(rowI+1)*configFontHeight, r)
+				}
 			}
-			if bot := colFontHeight * float64(1+rowI); bot > topSpace {
-				topSpace = bot
-			}
-		}
-		for _, child := range tree.Children {
-			walkColTree(child, rowI+1, colI)
-			colI += child.Width
+			walkColTree(tree.Children, rowI+1, colI)
+			colI += tree.Width
 		}
 	}
-	colI := 0
-	for _, tree := range colTree {
-		walkColTree(tree, 0, colI)
-		colI += tree.Width
-	}
-	maxBot := topSpace
+	walkColTree(colTree, 0, 0)
 
-	// Rows
-	var maxRight float64
-	for rowI, unitCfg := range cells.Rows {
-		top := topSpace + float64(rowI*(rowHeight+rowGap))
-		bot := top + rowHeight
+	var walkRowTree func(tree []*benchproc.ConfigTree, rowI, colI int)
+	walkRowTree = func(trees []*benchproc.ConfigTree, rowI, colI int) {
+		for _, tree := range trees {
+			if tree.Config != nil {
+				t, _ := y(rowI)
+				_, b := y(rowI + tree.Width - 1)
+				label := tree.Config.Val()
+				fmt.Fprintf(svg, `  <text transform="translate(%f %f) rotate(-90)" font-size="%f" text-anchor="middle">%s</text>`+"\n", float64(colI)*configFontHeight+configFontSize, (t+b)/2, configFontSize, label)
+				// Emit grouping bar (except at the bottom)
+				if tree.Children != nil {
+					fmt.Fprintf(svg, `  <path d="M%f %fV%f" stroke="black" stroke-width="1px" />`+"\n", float64(colI+1)*configFontHeight, t, b)
+				}
+			}
+			walkRowTree(tree.Children, rowI, colI+1)
+			rowI += tree.Width
+		}
+	}
+	walkRowTree(rowTree, 0, 0)
+
+	_, maxRight := x(len(cells.Rows) - 1)
+	_, maxBot := y(len(cells.Cols) - 1)
+
+	// Cell rows
+	for rowI, rowCfg := range cells.Rows {
+		top, bot := y(rowI)
 		if bot > maxBot {
 			maxBot = bot
 		}
-
-		unitInfo := units[unitCfg]
-
-		// Unit label
-		fmt.Fprintf(svg, `  <text font-size="%d" text-anchor="middle" transform="translate(%f %f) rotate(-90)">%s</text>`+"\n", unitFontSize, float64(unitFontSize), float64(top+rowHeight/2), unitInfo.tidyUnit)
 
 		// Construct scalers for this row.
 		var ext Extents
 		var scales Scales
 		for _, colCfg := range cells.Cols {
-			cell := cells.Load(unitCfg, colCfg).(Cell)
+			cell := cells.Load(rowCfg, colCfg).(Cell)
 			if cell == nil {
 				continue
 			}
@@ -320,7 +338,7 @@ func main() {
 		var prev Cell
 		var prevRight float64
 		for i, colCfg := range cells.Cols {
-			cell := cells.Load(unitCfg, colCfg).(Cell)
+			cell := cells.Load(rowCfg, colCfg).(Cell)
 			if cell == nil {
 				continue
 			}
@@ -348,7 +366,7 @@ func main() {
 
 	// Finalize SVG.
 	fmt.Printf(
-		`<svg version="1.1" width="%f" height="%f" xmlns="http://www.w3.org/2000/svg">
+		`<svg version="1.1" width="%f" height="%f" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
 %s</svg>`,
 		maxRight,
 		maxBot,
