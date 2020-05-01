@@ -165,6 +165,7 @@ func (c *DeltaCell) Render(svg *SVG, scales *Scales, prev0 Cell, prevRight float
 
 	// Show cross-cell deltas.
 	squiggle := func(bar deltaBar, x, y float64, west bool) {
+		var sidestep = (bar.r - bar.l) / 3
 		var path string
 		switch {
 		case y < bar.t:
@@ -177,14 +178,14 @@ func (c *DeltaCell) Render(svg *SVG, scales *Scales, prev0 Cell, prevRight float
 			// Connect to west.
 			path = fmt.Sprintf("M%f %fH%fV%fH%f",
 				bar.l, mid(bar.t, bar.b),
-				bar.l-(bar.r-bar.l+hMargin*2),
+				bar.l-sidestep,
 				y,
 				x)
 		default:
 			// Connect to east.
 			path = fmt.Sprintf("M%f %fH%fV%fH%f",
 				bar.r, mid(bar.t, bar.b),
-				bar.r+(bar.r-bar.l+hMargin*2),
+				bar.r+sidestep,
 				y,
 				x)
 		}
@@ -208,25 +209,27 @@ func (c *DeltaCell) Render(svg *SVG, scales *Scales, prev0 Cell, prevRight float
 		info := c.info[phaseCfg]
 		bar := layout[phaseCfg]
 
+		deltaLabel := benchunit.Scale(info.delta, c.unitClass)
+		if !strings.HasPrefix(deltaLabel, "-") {
+			// Make it clearer this is a delta by always
+			// putting a + or -.
+			deltaLabel = "+" + deltaLabel
+		}
+		barLabel := fmt.Sprintf("%s (%s)", phaseCfg.Val(), deltaLabel)
+
 		path := svgPathRect(bar.l, bar.t, bar.r, bar.b)
 		if bar.neg {
-			fmt.Fprintf(svg, `  <path d="%s" fill="none" stroke="%s" stroke-width="%d" />`+"\n", path, bar.fill, negStroke)
+			fmt.Fprintf(svg, `  <path d="%s" fill="none" stroke="%s" stroke-width="%d"><title>%s</title></path>`+"\n", path, bar.fill, negStroke, barLabel)
 		} else {
-			fmt.Fprintf(svg, `  <path d="%s" fill="%s" />`+"\n", path, bar.fill)
+			fmt.Fprintf(svg, `  <path d="%s" fill="%s"><title>%s</title></path>`+"\n", path, bar.fill, barLabel)
 		}
 
 		// Show delta at the end of the bar
-		label := benchunit.Scale(info.delta, c.unitClass)
-		if !strings.HasPrefix(label, "-") {
-			// Make it clearer this is a delta by always
-			// putting a + or -.
-			label = "+" + label
-		}
 		ly, anchor := bar.b+2, "end"
 		if bar.neg {
 			ly, anchor = bar.t-2, "start"
 		}
-		fmt.Fprintf(svg, `  <text transform="translate(%f %f) rotate(-90)" font-size="%d" text-anchor="%s" dominant-baseline="mathematical">%s</text>`+"\n", mid(bar.l, bar.r), ly, labelFontSize, anchor, label)
+		fmt.Fprintf(svg, `  <text transform="translate(%f %f) rotate(-90)" font-size="%d" text-anchor="%s" dominant-baseline="mathematical">%s</text>`+"\n", mid(bar.l, bar.r), ly, labelFontSize, anchor, deltaLabel)
 	}
 
 	// Show the peak at the very bottom.
