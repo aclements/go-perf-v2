@@ -325,8 +325,8 @@ func main() {
 	}
 	walkRowTree(rowTree, 0, 0)
 
-	_, maxRight := x(len(cells.Rows) - 1)
-	_, maxBot := y(len(cells.Cols) - 1)
+	_, maxRight := x(len(cells.Cols) - 1)
+	_, maxBot := y(len(cells.Rows) - 1)
 
 	// Cell rows
 	for rowI, rowCfg := range cells.Rows {
