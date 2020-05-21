@@ -2,6 +2,35 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Command benchfilter reads Go benchmark results from input files,
+// filters them, and writes filtered benchmark results to stdout. If
+// no inputs are provided, it reads from stdin.
+//
+// It supports the following query syntax:
+//
+// 	key:value     - Test if key equals value. Key and value can be quoted.
+// 	key:(x y ...) - Test if key equals any of x, y, etc.
+// 	x y ...       - Test if x, y, etc. are all true
+// 	x AND y       - Same as x y
+// 	x OR y        - Test if x or y are true
+// 	-x            - Negate x
+// 	(...)         - Subexpression
+//
+// Keys may be one of the following:
+//
+// 	.name         - The base name of a benchmark
+// 	.full         - The full name of a benchmark (including configuration)
+// 	.unit         - The name of a unit for a particular metric
+// 	/name-key     - Per-benchmark name configuration key
+// 	file-key      - File-level configuration key
+//
+// For example, the query
+//
+// 	.name:Lookup goos:linux .unit:(ns/op B/op)
+//
+// matches benchmarks called "Lookup" with file-level configuration
+// "goos" equal to "linux" and extracts just the "ns/op" and "B/op"
+// measurements.
 package main
 
 import (
@@ -9,33 +38,67 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	"golang.org/x/perf/v2/benchfmt"
+	"golang.org/x/perf/v2/benchproc"
 )
 
 func main() {
-	var units IncludeExclude
+	log.SetPrefix("")
+	log.SetFlags(0)
 
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), `Usage: %s [flags] [inputs...]
+		// Note: Keep this in sync with the package doc.
+		fmt.Fprintf(flag.CommandLine.Output(), `Usage: %s query [inputs...]
 
-Read Go benchmark results from input files, filter them, and write
-filtered benchmark results to stdout. If no inputs are provided, read
-from stdin.
+benchfilter reads Go benchmark results from input files, filters them,
+and writes filtered benchmark results to stdout. If no inputs are
+provided, it reads from stdin.
 
-Flags:
+It supports the following query syntax:
+
+	key:value     - Test if key equals value. Key and value can be quoted.
+	key:(x y ...) - Test if key equals any of x, y, etc.
+	x y ...       - Test if x, y, etc. are all true
+	x AND y       - Same as x y
+	x OR y        - Test if x or y are true
+	-x            - Negate x
+	(...)         - Subexpression
+
+Keys may be one of the following:
+
+	.name         - The base name of a benchmark
+	.full         - The full name of a benchmark (including configuration)
+	.unit         - The name of a unit for a particular metric
+	/name-key     - Per-benchmark name configuration key
+	file-key      - File-level configuration key
+
+For example, the query
+
+	.name:Lookup goos:linux .unit:(ns/op B/op)
+
+matches benchmarks called "Lookup" with file-level configuration
+"goos" equal to "linux" and extracts just the "ns/op" and "B/op"
+measurements.
 `, os.Args[0])
 		flag.PrintDefaults()
 	}
-	flag.Var(&units, "units", "comma-separated `list` of units to include or, when prefixed with '!', exclude")
 	flag.Parse()
+	if flag.NArg() < 1 {
+		flag.Usage()
+		os.Exit(2)
+	}
 
-	// TODO: Filtering on file keys and benchmark names and keys.
+	// TODO: Consider adding filtering on values, like "@ns/op>=100".
+
+	filter, err := benchproc.NewFilter(flag.Arg(0))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	var reader benchfmt.Reader
 	writer := benchfmt.NewWriter(os.Stdout)
-	files := FileArgs{Args: flag.Args()}
+	files := FileArgs{Args: flag.Args()[1:]}
 	for {
 		f, err := files.Next()
 		if err != nil {
@@ -55,7 +118,8 @@ Flags:
 				continue
 			}
 
-			if !filterUnits(res, &units) {
+			match := filter.Match(res)
+			if !match.Apply(res) {
 				continue
 			}
 
@@ -68,18 +132,6 @@ Flags:
 			log.Fatal(err)
 		}
 	}
-}
-
-func filterUnits(res *benchfmt.Result, keep *IncludeExclude) bool {
-	j := 0
-	for _, val := range res.Values {
-		if keep.Match(val.Unit) {
-			res.Values[j] = val
-			j++
-		}
-	}
-	res.Values = res.Values[:j]
-	return len(res.Values) > 0
 }
 
 type FileArgs struct {
@@ -113,34 +165,4 @@ func (fa *FileArgs) Next() (*os.File, error) {
 	fa.next++
 	fa.f = f
 	return f, nil
-}
-
-type IncludeExclude struct {
-	patterns []string
-}
-
-func (ie *IncludeExclude) Set(arg string) error {
-	parts := strings.Split(arg, ",")
-	// TODO: Support globs (but path.Match treats / specially)
-	ie.patterns = append(ie.patterns, parts...)
-	return nil
-}
-
-func (ie *IncludeExclude) String() string {
-	return strings.Join(ie.patterns, ",")
-}
-
-func (ie *IncludeExclude) Match(val string) bool {
-	if len(ie.patterns) == 0 {
-		return true
-	}
-	match := strings.HasPrefix(ie.patterns[0], "!")
-	for _, pat := range ie.patterns {
-		if strings.HasPrefix(pat, "!") && pat[1:] == val {
-			match = false
-		} else if pat == val {
-			match = true
-		}
-	}
-	return match
 }
