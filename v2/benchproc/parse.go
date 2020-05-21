@@ -28,7 +28,7 @@ type ParseOpts struct {
 //   top         = tuple .
 //   tuple       = [ projection { "," projection } ] .
 //   projection  = "(" tuple ")" | special_key | name_key | file_key
-//   special_key = ".name" | ".base" | ".config"
+//   special_key = ".name" | ".full" | ".config"
 //   name_key    = "/" key
 //   file_key    = key
 //   key         = { [^,()[:space:]] }
@@ -155,16 +155,20 @@ func (p *parser) projection() Projection {
 	p.ws()
 
 	// Distinguish key type.
+	var proj Projection
+	var err error
 	if ctor, ok := p.opts.Special[key]; ok {
-		return ctor()
+		proj = ctor()
 	} else if key == ".name" {
-		return NewProjectFullName(p.opts.Exclude)
-	} else if key == ".base" {
-		return &ProjectBaseName{}
+		proj, err = NewProjectFullName(p.opts.Exclude)
 	} else if key == ".config" {
-		return NewProjectFileConfig(p.opts.Exclude)
-	} else if key[0] == '/' {
-		return &ProjectNameKey{Key: key}
+		proj = NewProjectFileConfig(p.opts.Exclude)
+	} else {
+		proj, err = NewProjectKey(key)
+		if err != nil {
+			p.syntaxError(err.Error())
+			return nil
+		}
 	}
-	return &ProjectFileKey{key}
+	return proj
 }

@@ -5,10 +5,6 @@
 package benchproc
 
 import (
-	"bytes"
-	"strings"
-	"sync"
-
 	"golang.org/x/perf/v2/benchfmt"
 )
 
@@ -51,169 +47,37 @@ func (p *ProjectProduct) AppendStaticKeys(keys []string) []string {
 	return keys
 }
 
-// ProjectFileKey projects a file configuration key.
-type ProjectFileKey struct {
-	Key string
+// A projectExtractor projects a simple key/value pair from a result
+// using a benchfmt.Extractor.
+type projectExtractor struct {
+	key string
+	ext benchfmt.Extractor
 }
 
-// Project returns a key/value Config with the key p.Key and a value
-// of the file configuration key p.Key, or "" if the key is not
-// present.
-func (p *ProjectFileKey) Project(cs *ConfigSet, r *benchfmt.Result) *Config {
-	pos, ok := r.FileConfigIndex(p.Key)
-	val := ""
-	if ok {
-		val = r.FileConfig[pos].Value
+// NewProjectKey returns a Projection for the given extractor key. See
+// benchfmt.NewExtractor for supported keys.
+func NewProjectKey(key string) (Projection, error) {
+	ext, err := benchfmt.NewExtractor(key)
+	if err != nil {
+		return nil, err
 	}
-	return cs.KeyVal(p.Key, val)
-}
-
-func (p *ProjectFileKey) AppendStaticKeys(keys []string) []string {
-	return append(keys, p.Key)
-}
-
-// ProjectFullName projects the full name of a benchmark. The zero
-// value of ProjectFullName is a valid projection that excludes no
-// keys.
-type ProjectFullName struct {
-	replace       map[string][]byte
-	excGomaxprocs bool
+	return &projectExtractor{key, ext}, nil
 }
 
 // NewProjectFullName returns a new projection for the full name of a
 // benchmark, but with any name keys in exclude normalized in the
 // projected Config.
-func NewProjectFullName(exclude []string) *ProjectFullName {
-	// Extract the name keys, turn them into substrings and
-	// construct their normalized replacement.
-	var replace map[string][]byte
-	excGomaxprocs := false
-	for _, k := range exclude {
-		if !strings.HasPrefix(k, "/") {
-			continue
-		}
-		if replace == nil {
-			replace = make(map[string][]byte)
-		}
-		replace[k+"="] = append([]byte(k), '=', '*')
-		if k == "/gomaxprocs" {
-			excGomaxprocs = true
-		}
-	}
-	return &ProjectFullName{replace, excGomaxprocs}
+func NewProjectFullName(exclude []string) (Projection, error) {
+	ext := benchfmt.NewExtractorFullName(exclude)
+	return &projectExtractor{".full", ext}, nil
 }
 
-// Project returns a key/value Config with the key ".name" and a value
-// of the full name of the benchmark.
-func (p *ProjectFullName) Project(cs *ConfigSet, r *benchfmt.Result) *Config {
-	name := cs.Bytes(r.FullName)
-	found := false
-	if len(p.replace) != 0 {
-		for k := range p.replace {
-			if strings.Contains(name, k) {
-				found = true
-				break
-			}
-		}
-		if p.excGomaxprocs && strings.IndexByte(name, '-') >= 0 {
-			found = true
-		}
-	}
-	if !found {
-		// No need to transform name.
-		return cs.KeyVal(".name", name)
-	}
-
-	// Normalize excluded keys from the name.
-	base, parts := r.NameParts()
-	newName := make([]byte, 0, 100)
-	newName = append(newName, base...)
-	for _, part := range parts {
-		eq := bytes.IndexByte(part, '=') + 1
-		if eq > 0 {
-			replacement, ok := p.replace[string(part[:eq])]
-			if ok {
-				newName = append(newName, replacement...)
-				continue
-			}
-		}
-		if p.excGomaxprocs && part[0] == '-' {
-			newName = append(newName, '-', '*')
-			continue
-		}
-		newName = append(newName, part...)
-	}
-	return cs.KeyVal(".name", cs.Bytes(newName))
+func (p *projectExtractor) Project(cs *ConfigSet, r *benchfmt.Result) *Config {
+	return cs.KeyVal(p.key, p.ext(r))
 }
 
-func (p *ProjectFullName) AppendStaticKeys(keys []string) []string {
-	return append(keys, ".name")
-}
-
-// ProjectBaseName projects the base name of a benchmark, without any
-// per-benchmark configuration.
-type ProjectBaseName struct{}
-
-// Project returns a key/value Config with the key ".base" and a value
-// of the base name of the benchmark.
-func (p *ProjectBaseName) Project(cs *ConfigSet, r *benchfmt.Result) *Config {
-	baseName, _ := r.NameParts()
-	return cs.KeyVal(".base", cs.Bytes(baseName))
-}
-
-func (p *ProjectBaseName) AppendStaticKeys(keys []string) []string {
-	return append(keys, ".base")
-}
-
-// ProjectNameKey projects a specific key from per-benchmark
-// configuration. The key must begin with "/". The key "/gomaxprocs"
-// will match the implicit GOMAXPROCS specified as "-N" at the end of
-// a benchmark name.
-type ProjectNameKey struct {
-	Key string
-
-	once       sync.Once
-	prefix     []byte
-	gomaxprocs bool
-}
-
-// Project returns a key/value Config with the key p.Key and the value
-// of p.Key from the benchmark's name configuration. If p.Key isn't
-// present in the name configuration, the value is "".
-func (p *ProjectNameKey) Project(cs *ConfigSet, r *benchfmt.Result) *Config {
-	p.once.Do(func() {
-		if !strings.HasPrefix(p.Key, "/") {
-			panic("name key must being with /")
-		}
-
-		// Construct the byte prefix to search for.
-		prefix := make([]byte, len(p.Key)+1)
-		copy(prefix, p.Key)
-		prefix[len(prefix)-1] = '='
-		p.prefix = prefix
-		p.gomaxprocs = p.Key == "/gomaxprocs"
-	})
-
-	_, parts := r.NameParts()
-	if p.gomaxprocs && len(parts) > 0 {
-		last := parts[len(parts)-1]
-		if last[0] == '-' {
-			// GOMAXPROCS specified as "-N" suffix.
-			return cs.KeyVal(p.Key, cs.Bytes(last[1:]))
-		}
-	}
-	// Search for the prefix.
-	for _, part := range parts {
-		if bytes.HasPrefix(part, p.prefix) {
-			return cs.KeyVal(p.Key, cs.Bytes(part[len(p.prefix):]))
-		}
-	}
-	// Not found.
-	return cs.KeyVal(p.Key, "")
-}
-
-func (p *ProjectNameKey) AppendStaticKeys(keys []string) []string {
-	return append(keys, p.Key)
+func (p *projectExtractor) AppendStaticKeys(keys []string) []string {
+	return append(keys, p.key)
 }
 
 // ProjectFileConfig projects the full file configuration as a tuple
