@@ -16,6 +16,8 @@
 // The format is documented at https://golang.org/design/14313-benchmark-format
 package benchfmt
 
+import "bytes"
+
 // Result is a single benchmark result and all of its measurements.
 type Result struct {
 	// FileConfig is the set of file-level key/value pairs in
@@ -124,6 +126,20 @@ func (r *Result) Value(unit string) (float64, bool) {
 	return 0, false
 }
 
+// BaseName returns the base part of r's name, without any
+// configuration keys or GOMAXPROCS.
+func (r *Result) BaseName() []byte {
+	if len(r.nameParts) > 0 {
+		return r.nameParts[0]
+	}
+	buf, _ := r.splitGomaxprocs()
+	slash := bytes.IndexByte(buf, '/')
+	if slash < 0 {
+		return buf
+	}
+	return buf[:slash]
+}
+
 // NameParts returns the base name and sub-benchmark configuration
 // parts. Each sub-benchmark configuration part is one of three forms:
 //
@@ -138,18 +154,8 @@ func (r *Result) Value(unit string) (float64, bool) {
 // reconstructs the full name.
 func (r *Result) NameParts() (baseName []byte, parts [][]byte) {
 	if len(r.nameParts) == 0 {
-		buf := r.FullName
 		// First pull off any GOMAXPROCS.
-		var gomaxprocs []byte
-		for i := len(buf) - 1; i >= 0; i-- {
-			if buf[i] == '-' && i < len(buf)-1 {
-				gomaxprocs, buf = buf[i:], buf[:i]
-				break
-			} else if !('0' <= buf[i] && buf[i] <= '9') {
-				// Not a digit.
-				break
-			}
-		}
+		buf, gomaxprocs := r.splitGomaxprocs()
 		// Split the remaining parts.
 		prev := 0
 		for i, c := range buf {
@@ -164,4 +170,17 @@ func (r *Result) NameParts() (baseName []byte, parts [][]byte) {
 		}
 	}
 	return r.nameParts[0], r.nameParts[1:]
+}
+
+func (r *Result) splitGomaxprocs() (prefix, gomaxprocs []byte) {
+	buf := r.FullName
+	for i := len(buf) - 1; i >= 0; i-- {
+		if buf[i] == '-' && i < len(buf)-1 {
+			return buf[:i], buf[i:]
+		} else if !('0' <= buf[i] && buf[i] <= '9') {
+			// Not a digit.
+			break
+		}
+	}
+	return buf, nil
 }
