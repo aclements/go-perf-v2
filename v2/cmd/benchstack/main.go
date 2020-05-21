@@ -149,7 +149,7 @@ func main() {
 		os.Exit(1)
 	}
 	colBy, rowBy := groupBys[0], groupBys[1]
-	phaseBy := &benchproc.ProjectFullName{}
+	phaseBy := benchproc.NewProjectExtractor(".full")
 
 	// XXX Take this as an argument?
 	units := make(map[*benchproc.Config]unitInfo) // unit config
