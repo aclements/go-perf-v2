@@ -82,6 +82,13 @@ func (f *Filter) Match(res *benchfmt.Result) Match {
 	// OR is true. I can pre-compute whether a change in some file
 	// key is necessary to change the result if it's currently
 	// true or currently false and cache the previous result.
+	//
+	// Actually, it would be far simpler if I just took advantage
+	// of short-circuit evaluation and reordered the expression to
+	// put "easy" things like file keys first and name keys last.
+	// Short-circuiting would require that the intermediate
+	// matchBuilder be able to answer "any" and "all" questions.
+	// (For that, it might be better to just track a weight.)
 
 	m := f.match(res, f.query)
 	return m.finish(!f.usesUnits, len(res.Values))
@@ -90,6 +97,19 @@ func (f *Filter) Match(res *benchfmt.Result) Match {
 func (f *Filter) match(res *benchfmt.Result, node kvql.Query) (m matchBuilder) {
 	switch node := node.(type) {
 	case *kvql.QueryOp:
+		if len(node.Exprs) == 0 {
+			if f.usesUnits {
+				m = newMatchBuilder(len(res.Values))
+			}
+			switch node.Op {
+			case kvql.OpAnd:
+				m.setAll()
+				return
+			case kvql.OpOr:
+				return
+			}
+		}
+
 		m = f.match(res, node.Exprs[0])
 		switch node.Op {
 		case kvql.OpNot:
@@ -133,14 +153,7 @@ func (f *Filter) match(res *benchfmt.Result, node kvql.Query) (m matchBuilder) {
 		}
 		ext := f.extractors[node.Key]
 		if node.Match(ext(res)) {
-			if !f.usesUnits {
-				m.set(0)
-			} else {
-				m.head = ^uint64(0)
-				for i := range m.rest {
-					m.rest[i] = ^uint64(0)
-				}
-			}
+			m.setAll()
 		}
 	}
 	return
@@ -163,6 +176,13 @@ func (m *matchBuilder) set(i int) {
 		m.head |= 1 << i
 	} else {
 		m.rest[i/64-1] |= 1 << (i % 64)
+	}
+}
+
+func (m *matchBuilder) setAll() {
+	m.head = ^uint64(0)
+	for i := range m.rest {
+		m.rest[i] = ^uint64(0)
 	}
 }
 

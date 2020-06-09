@@ -9,14 +9,16 @@
 //   expr    = andExpr {"OR" andExpr} .
 //   andExpr = phrase {"AND" phrase} .
 //   phrase  = match {match} .
-//   match   = "(" expr ")" .
+//   match   = "(" expr ")"
 //           | "-" match
-//           | word ":" (word | "(" {word} ")")
+//           | "*"
+//           | word ":" (word | "(" {word} ")") .
 //   word    = [^ ():]* | "\"" [^"]* "\""
 package kvql
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"unicode"
 	"unicode/utf8"
@@ -115,6 +117,8 @@ func tokenize(q string) ([]tok, error) {
 				toks = append(toks, tok{'A', off, word})
 			} else if !quoted && word == "OR" {
 				toks = append(toks, tok{'O', off, word})
+			} else if !quoted && word == "*" {
+				toks = append(toks, tok{'*', off, word})
 			} else {
 				toks = append(toks, tok{'w', off, word})
 			}
@@ -157,7 +161,7 @@ type parser struct {
 
 func (p *parser) error(i int, msg string) int {
 	off := p.toks[i].off
-	if p.err == nil || p.err.Off > off {
+	if p.err == nil || off < p.err.Off {
 		p.err = &SyntaxError{p.q, off, msg}
 	}
 	// Move to the end token.
@@ -202,7 +206,7 @@ func (p *parser) phrase(i int) (Query, int) {
 loop:
 	for {
 		switch p.toks[i].kind {
-		case '(', '-', '=':
+		case '(', '-', '=', '*':
 			q, i = p.match(i)
 			terms = append(terms, q)
 		case ')', 'A', 'O', 0:
@@ -234,19 +238,22 @@ func (p *parser) match(i int) (Query, int) {
 		q, i := p.match(i + 1)
 		q = &QueryOp{OpNot, []Query{q}}
 		return q, i
+	case '*':
+		q := &QueryOp{OpAnd, nil}
+		return q, i + 1
 	case '=':
 		off := p.toks[i].off
+		key := p.toks[i].tok
 		switch p.toks[i+1].kind {
 		case 'w':
 			// Simple match.
-			q := &QueryMatch{off, p.toks[i].tok, p.toks[i+1].tok}
-			return q, i + 2
+			return p.matchWord(i+1, off, key)
 		case '(':
 			// Multi-match.
-			key := p.toks[i].tok
 			terms := []Query{}
-			for i += 2; p.toks[i].kind == 'w'; i++ {
-				q := &QueryMatch{off, key, p.toks[i].tok}
+			for i += 2; p.toks[i].kind == 'w'; {
+				var q Query
+				q, i = p.matchWord(i, off, key)
 				terms = append(terms, q)
 			}
 			if p.toks[i].kind != ')' {
@@ -260,4 +267,20 @@ func (p *parser) match(i int) (Query, int) {
 		}
 	}
 	return nil, p.error(i, "expected key:value or subexpression")
+}
+
+func (p *parser) matchWord(i int, keyOff int, key string) (Query, int) {
+	if p.toks[i].kind != 'w' {
+		panic("makeMatch called on non-word token")
+	}
+	// Make sure the regexp is well-formed before we manipulate
+	// the string.
+	_, err := regexp.Compile(p.toks[i].tok)
+	if err != nil {
+		return nil, p.error(i, err.Error())
+	}
+
+	// Now make the regexp we'll actually use.
+	re := regexp.MustCompile("^(?:" + p.toks[i].tok + ")$")
+	return &QueryMatch{keyOff, key, re, p.toks[i].tok}, i + 1
 }

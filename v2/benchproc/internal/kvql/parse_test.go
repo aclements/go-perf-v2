@@ -23,6 +23,7 @@ func TestParse(t *testing.T) {
 			t.Errorf("%s: want error %s at %d; got %s", query, error, pos, err)
 		}
 	}
+	check(`*`, `*`)
 	check(`a:b`, `a:b`)
 	checkErr(`a`, "expected key:value", 0)
 	checkErr(`a :`, "missing key", 2)
@@ -37,9 +38,11 @@ func TestParse(t *testing.T) {
 	checkErr(`(a:b))`, "unexpected \")\"", 5)
 	check(`a:b c:d e:f`, `(a:b AND c:d AND e:f)`)
 	check(`-a:b`, `-a:b`)
+	check(`-*`, `-*`)
 	check(`a:b AND c:d`, `(a:b AND c:d)`)
 	check(`-a:b AND c:d`, `(-a:b AND c:d)`)
 	check(`-(a:b AND c:d)`, `-(a:b AND c:d)`)
+	check(`a:b AND * AND c:d`, `(a:b AND * AND c:d)`)
 	check(`a:b OR c:d`, `(a:b OR c:d)`)
 	check(`a:b AND c:d OR e:f AND g:h`, `((a:b AND c:d) OR (e:f AND g:h))`)
 	check(`a:b AND (c:d OR e:f) AND g:h`, `(a:b AND (c:d OR e:f) AND g:h)`)

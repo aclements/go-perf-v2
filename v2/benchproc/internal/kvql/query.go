@@ -6,6 +6,7 @@ package kvql
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -23,7 +24,8 @@ type Query interface {
 type QueryMatch struct {
 	Off   int // Byte offset of the key in the original query.
 	Key   string
-	match string
+	match *regexp.Regexp
+	mStr  string // Original query regexp
 }
 
 func (q *QueryMatch) isQuery() {}
@@ -41,12 +43,12 @@ func (q *QueryMatch) String() string {
 		// No quoting necessary.
 		return s
 	}
-	return quote(q.Key) + ":" + quote(q.match)
+	return quote(q.Key) + ":" + quote(q.mStr)
 }
 
 // Match returns whether q matches the given value of q.Key.
 func (q *QueryMatch) Match(value string) bool {
-	return value == q.match
+	return q.match.MatchString(value)
 }
 
 // QueryOp is a boolean operator in the Query tree. OpNot must have
@@ -64,8 +66,14 @@ func (q *QueryOp) String() string {
 	case OpNot:
 		return fmt.Sprintf("-%s", q.Exprs[0])
 	case OpAnd:
+		if len(q.Exprs) == 0 {
+			return "*"
+		}
 		op = " AND "
 	case OpOr:
+		if len(q.Exprs) == 0 {
+			return "-*"
+		}
 		op = " OR "
 	}
 	var buf strings.Builder

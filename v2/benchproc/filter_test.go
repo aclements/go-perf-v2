@@ -64,6 +64,7 @@ func TestFilter(t *testing.T) {
 	})
 
 	t.Run("boolean", func(t *testing.T) {
+		check(t, "*", ALL)
 		check(t, "f1:v1 OR f1:v2", ALL)
 		check(t, "f1:v1 AND f1:v2", NONE)
 		check(t, "f1:v1 f1:v2", NONE)
