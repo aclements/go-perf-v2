@@ -128,10 +128,17 @@ func (projectKind) AppendStaticKeys(keys []string) []string {
 func main() {
 	flagCol := flag.String("col", "branch,commit-date", "split columns by distinct values of `projection`")
 	flagRow := flag.String("row", "benchmark,.kind", "split rows by distinct values of `projection`")
+	flagFilter := flag.String("filter", "*", "use only benchmarks matching benchfilter `query`")
 	flag.Parse()
 	if flag.NArg() == 0 {
 		flag.Usage()
 		os.Exit(2)
+	}
+
+	// TODO: Put filter arg in a package along with FileArgs.
+	filter, err := benchproc.NewFilter(*flagFilter)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	cs := new(benchproc.ConfigSet)
@@ -188,6 +195,11 @@ func main() {
 			res, err := reader.Result()
 			if err != nil {
 				log.Print(err)
+				continue
+			}
+
+			match := filter.Match(res)
+			if !match.Apply(res) {
 				continue
 			}
 
