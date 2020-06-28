@@ -109,25 +109,9 @@ type unitInfo struct {
 	newCells   func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
 }
 
-type projectKind struct{}
-
-var gcSuffix = []byte("_GC")
-
-func (projectKind) Project(cs *benchproc.ConfigSet, res *benchfmt.Result) *benchproc.Config {
-	baseName, _ := res.NameParts()
-	if bytes.HasSuffix(baseName, gcSuffix) {
-		return cs.KeyVal(".kind", "mem")
-	}
-	return cs.KeyVal(".kind", "cpu")
-}
-
-func (projectKind) AppendStaticKeys(keys []string) []string {
-	return append(keys, ".kind")
-}
-
 func main() {
 	flagCol := flag.String("col", "branch,commit-date", "split columns by distinct values of `projection`")
-	flagRow := flag.String("row", "benchmark,.kind", "split rows by distinct values of `projection`")
+	flagRow := flag.String("row", "benchmark,/kind", "split rows by distinct values of `projection`")
 	flagFilter := flag.String("filter", "*", "use only benchmarks matching benchfilter `query`")
 	flag.Parse()
 	if flag.NArg() == 0 {
@@ -143,20 +127,14 @@ func main() {
 
 	cs := new(benchproc.ConfigSet)
 
-	parseOpts := benchproc.ParseOpts{
-		Special: map[string]func() benchproc.Projection{
-			".kind": func() benchproc.Projection {
-				return projectKind{}
-			},
-		},
-	}
+	parseOpts := benchproc.ParseOpts{}
 	groupBys, err := benchproc.ParseProjectionBundle([]string{*flagCol, *flagRow}, parseOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parsing -col and -row: %s", err)
 		os.Exit(1)
 	}
 	colBy, rowBy := groupBys[0], groupBys[1]
-	phaseBy, _ := benchproc.NewProjectKey(".full")
+	phaseBy, _ := benchproc.NewProjectKey(".name")
 
 	// XXX Take this as an argument?
 	units := make(map[*benchproc.Config]unitInfo) // unit config
@@ -198,17 +176,19 @@ func main() {
 				continue
 			}
 
+			// Canonicalize "_GC" to a name key (that's
+			// how it should have been in the first
+			// place).
+			if strings.HasSuffix(string(res.FullName), "_GC") {
+				res.FullName = append(res.FullName[:len(res.FullName)-len("_GC")], "/kind=mem"...)
+			} else {
+				res.FullName = append(res.FullName, "/kind=cpu"...)
+			}
+
 			match := filter.Match(res)
 			if !match.Apply(res) {
 				continue
 			}
-
-			// if !strings.HasSuffix(string(res.FullName), "_GC") {
-			// 	continue
-			// }
-			// if strings.HasSuffix(string(res.FullName), "_GC") {
-			// 	continue
-			// }
 
 			// Ignore total time benchmark.
 			if strings.HasPrefix(string(res.FullName), "TotalTime") {
