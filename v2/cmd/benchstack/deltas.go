@@ -29,6 +29,8 @@ type DeltaCell struct {
 
 type deltaRow struct {
 	maxVal float64
+
+	phaseOrder []*benchproc.Config
 }
 
 type deltaInfo struct {
@@ -82,7 +84,8 @@ func NewDeltaCells(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 			}
 		}
 	}
-	// Filter phases.
+	// Filter phases and accumulate phase orders.
+	var phaseOrders [][]*benchproc.Config
 	for _, cell := range cells {
 		cell := cell.(*DeltaCell)
 		var newPhases []*benchproc.Config
@@ -92,7 +95,11 @@ func NewDeltaCells(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 			}
 		}
 		cell.phases = newPhases
+		phaseOrders = append(phaseOrders, newPhases)
 	}
+
+	// Construct a global phase order.
+	row.phaseOrder = globalOrder(phaseOrders)
 
 	return cells
 }
@@ -248,24 +255,31 @@ func (c *DeltaCell) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, b
 
 	// Create initial visual intervals.
 	var intervals []interval
-	for _, phaseCfg := range c.phases {
-		info := c.info[phaseCfg]
-		inY := mid(y.Map(info.start), y.Map(info.end))
+	var inY float64
+	for _, phaseCfg := range c.row.phaseOrder {
+		if info, ok := c.info[phaseCfg]; ok {
+			inY = mid(y.Map(info.start), y.Map(info.end))
+		}
 		in := interval{inY - keyFontHeight/2, inY + keyFontHeight/2, phaseCfg}
 		intervals = append(intervals, in)
 	}
 	removeIntervalOverlaps(intervals)
 
 	// Emit labels.
+	inY = 0
 	for _, in := range intervals {
 		phaseCfg := in.data.(*benchproc.Config)
-		info := c.info[phaseCfg]
 		label := phaseCfg.Val()
+		if info, ok := c.info[phaseCfg]; ok {
+			inY = mid(y.Map(info.start), y.Map(info.end))
+		} else {
+			label = "[" + label + "]"
+		}
 		stroke := svgColor(lastScales.Colors[phaseCfg])
 		fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" dominant-baseline="central">%s</text>`+"\n", x+keyFontSize/2, in.mid(), keyFontSize, label)
 		fmt.Fprintf(svg, `  <path d="%s" stroke="%s" stroke-width="2px" fill="none" />`+"\n",
 			svgPathHSquiggle(
-				lastRight, mid(y.Map(info.start), y.Map(info.end)),
+				lastRight, inY,
 				x, in.mid(),
 			),
 			stroke)

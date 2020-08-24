@@ -331,7 +331,7 @@ func main() {
 		var ext Extents
 		var scales Scales
 		for _, colCfg := range cells.Cols {
-			cell := cells.Load(rowCfg, colCfg).(Cell)
+			cell, _ := cells.Load(rowCfg, colCfg).(Cell)
 			if cell == nil {
 				continue
 			}
@@ -352,7 +352,7 @@ func main() {
 		var prev Cell
 		var prevRight float64
 		for i, colCfg := range cells.Cols {
-			cell := cells.Load(rowCfg, colCfg).(Cell)
+			cell, _ := cells.Load(rowCfg, colCfg).(Cell)
 			if cell == nil {
 				continue
 			}

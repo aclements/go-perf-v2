@@ -190,12 +190,13 @@ func (s *Stack) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, bot f
 	// Emit labels
 	for _, in := range intervals {
 		phaseCfg := in.data.(*benchproc.Config)
+		label := phaseCfg.Val()
 		if phaseX, ok := s.phases.LoadOK(phaseCfg); ok {
 			phase = phaseX.(stackPhase)
 		} else {
 			phase.start = phase.end
+			label = "[" + label + "]"
 		}
-		label := phaseCfg.Val()
 		stroke := svgColor(lastScales.Colors[phaseCfg])
 		fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%d" dominant-baseline="central">%s</text>`+"\n", x+keyFontSize/2, in.mid(), keyFontSize, label)
 		fmt.Fprintf(svg, `  <path d="%s" stroke="%s" stroke-width="2px" fill="none" />`+"\n",
