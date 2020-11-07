@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 // An Extractor returns some component of a benchmark result.
@@ -34,16 +33,14 @@ func NewExtractor(key string) (Extractor, error) {
 		return nil, fmt.Errorf("key must not be empty")
 	}
 
-	switch key[0] {
-	case '.':
-		if key == ".name" {
-			return extractName, nil
-		} else if key == ".fullname" {
-			return extractFull, nil
-		}
-		return nil, fmt.Errorf("unknown special key: %s", key)
+	switch {
+	case key == ".name":
+		return extractName, nil
 
-	case '/':
+	case key == ".fullname":
+		return extractFull, nil
+
+	case strings.HasPrefix(key, "/"):
 		// Construct the byte prefix to search for.
 		prefix := make([]byte, len(key)+1)
 		copy(prefix, key)
@@ -52,32 +49,11 @@ func NewExtractor(key string) (Extractor, error) {
 		return func(res *Result) string {
 			return extractNamePart(res, prefix, isGomaxprocs)
 		}, nil
-
-	default:
-		if isFileKey(key) {
-			return func(res *Result) string {
-				return extractFileKey(res, key)
-			}, nil
-		}
 	}
 
-	return nil, fmt.Errorf("expected .name, .fullname, /key, or file key: %s", key)
-}
-
-func isFileKey(key string) bool {
-	// See parseKeyValueLine.
-	if len(key) == 0 {
-		return false
-	}
-	for i, r := range key {
-		if i == 0 && !unicode.IsLower(r) {
-			return false
-		}
-		if unicode.IsSpace(r) || unicode.IsUpper(r) {
-			return false
-		}
-	}
-	return true
+	return func(res *Result) string {
+		return extractFileKey(res, key)
+	}, nil
 }
 
 // NewExtractorFullName returns an extractor for the full name of a

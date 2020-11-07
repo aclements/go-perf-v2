@@ -6,7 +6,6 @@ package benchproc
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"golang.org/x/perf/v2/benchfmt"
@@ -92,14 +91,6 @@ func TestFilter(t *testing.T) {
 			if got != want {
 				t.Errorf("for unit u%d, got %v, want %v", i, got, want)
 			}
-		}
-	})
-
-	t.Run("badSyntax", func(t *testing.T) {
-		_, err := NewFilter("Foo:bar")
-		want := "syntax error: expected .name, .full, /key, or file key: Foo"
-		if err == nil || !strings.HasPrefix(err.Error(), want) {
-			t.Errorf("got error %q, want error prefix %q", err, want)
 		}
 	})
 }

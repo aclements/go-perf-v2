@@ -126,14 +126,6 @@ func TestExtractBadKey(t *testing.T) {
 			t.Errorf("got error %s, want error %s", got, want)
 		}
 	}
-	t.Run("special", func(t *testing.T) {
-		_, err := NewExtractor(".bad")
-		check(t, err, "unknown special key: .bad")
-	})
-	t.Run("other", func(t *testing.T) {
-		_, err := NewExtractor("Foo")
-		check(t, err, "expected .name, .fullname, /key, or file key: Foo")
-		_, err = NewExtractor("foo bar")
-		check(t, err, "expected .name, .fullname, /key, or file key: foo bar")
-	})
+	_, err := NewExtractor("")
+	check(t, err, "key must not be empty")
 }
