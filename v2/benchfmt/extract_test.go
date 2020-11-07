@@ -28,11 +28,11 @@ func TestExtractName(t *testing.T) {
 	check(t, x, "Test/a-4", "Test")
 }
 
-func TestExtractFull(t *testing.T) {
+func TestExtractFullName(t *testing.T) {
 	check := checkNameExtractor
 
 	t.Run("basic", func(t *testing.T) {
-		x, err := NewExtractor(".full")
+		x, err := NewExtractor(".fullname")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -49,6 +49,16 @@ func TestExtractFull(t *testing.T) {
 		check(t, x, "Test/a=123/b=123", "Test/a=*/b=123")
 		check(t, x, "Test/a=123/a=123", "Test/a=*/a=*")
 		check(t, x, "Test/a=123-2", "Test/a=*-2")
+	})
+
+	t.Run("excludeName", func(t *testing.T) {
+		x := NewExtractorFullName([]string{".name"})
+		check(t, x, "Test", "*")
+		check(t, x, "Test/a=123", "*/a=123")
+		x = NewExtractorFullName([]string{".name", "/a"})
+		check(t, x, "Test", "*")
+		check(t, x, "Test/a=123", "*/a=*")
+		check(t, x, "Test/a=123/b=123", "*/a=*/b=123")
 	})
 
 	t.Run("excludeGomaxprocs", func(t *testing.T) {
@@ -122,8 +132,8 @@ func TestExtractBadKey(t *testing.T) {
 	})
 	t.Run("other", func(t *testing.T) {
 		_, err := NewExtractor("Foo")
-		check(t, err, "expected .name, .full, /key, or file key: Foo")
+		check(t, err, "expected .name, .fullname, /key, or file key: Foo")
 		_, err = NewExtractor("foo bar")
-		check(t, err, "expected .name, .full, /key, or file key: foo bar")
+		check(t, err, "expected .name, .fullname, /key, or file key: foo bar")
 	})
 }

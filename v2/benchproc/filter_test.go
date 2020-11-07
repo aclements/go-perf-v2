@@ -54,7 +54,7 @@ func TestFilter(t *testing.T) {
 		check(t, "/n1:v3", ALL)
 		// Special keys
 		check(t, ".name:Name", ALL)
-		check(t, ".full:Name/n1=v3", ALL)
+		check(t, ".fullname:Name/n1=v3", ALL)
 	})
 
 	t.Run("units", func(t *testing.T) {

@@ -22,7 +22,8 @@ type Extractor func(*Result) string
 // - ".name" for the benchmark name (excluding per-benchmark
 // configuration).
 //
-// - ".full" for the full benchmark name (including configuration).
+// - ".fullname" for the full benchmark name (including per-benchmark
+// configuration).
 //
 // - "/{key}" for a benchmark name key. This may be "/gomaxprocs" and
 // the extractor will normalize the name as needed.
@@ -37,7 +38,7 @@ func NewExtractor(key string) (Extractor, error) {
 	case '.':
 		if key == ".name" {
 			return extractName, nil
-		} else if key == ".full" {
+		} else if key == ".fullname" {
 			return extractFull, nil
 		}
 		return nil, fmt.Errorf("unknown special key: %s", key)
@@ -60,7 +61,7 @@ func NewExtractor(key string) (Extractor, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("expected .name, .full, /key, or file key: %s", key)
+	return nil, fmt.Errorf("expected .name, .fullname, /key, or file key: %s", key)
 }
 
 func isFileKey(key string) bool {
@@ -80,16 +81,22 @@ func isFileKey(key string) bool {
 }
 
 // NewExtractorFullName returns an extractor for the full name of a
-// benchmark, but optionally with name configuration keys excluded.
-// Any excluded keys will be normalized to "/key=*" (or "-*" for
-// gomaxprocs). This will ignore anything in the exclude list that
-// isn't in the form of a /-prefixed name configuration key.
+// benchmark, but optionally with the base name or name configuration
+// keys excluded. Any excluded name configuration keys will be
+// normalized to "/key=*" (or "-*" for gomaxprocs). If ".name" is
+// excluded, the name will be normalized to "*". This will ignore
+// anything in the exclude list that isn't in the form of a /-prefixed
+// name configuration key or ".name".
 func NewExtractorFullName(exclude []string) Extractor {
 	// Extract the name keys, turn them into substrings and
 	// construct their normalized replacement.
 	var replace [][]byte
+	excName := false
 	excGomaxprocs := false
 	for _, k := range exclude {
+		if k == ".name" {
+			excName = true
+		}
 		if !strings.HasPrefix(k, "/") {
 			continue
 		}
@@ -98,11 +105,11 @@ func NewExtractorFullName(exclude []string) Extractor {
 			excGomaxprocs = true
 		}
 	}
-	if len(replace) == 0 && !excGomaxprocs {
+	if len(replace) == 0 && !excName && !excGomaxprocs {
 		return extractFull
 	}
 	return func(res *Result) string {
-		return extractFullExcluded(res, replace, excGomaxprocs)
+		return extractFullExcluded(res, replace, excName, excGomaxprocs)
 	}
 }
 
@@ -114,16 +121,21 @@ func extractFull(res *Result) string {
 	return string(res.FullName)
 }
 
-func extractFullExcluded(res *Result, replace [][]byte, excGomaxprocs bool) string {
+func extractFullExcluded(res *Result, replace [][]byte, excName, excGomaxprocs bool) string {
 	name := res.FullName
 	found := false
-	for _, k := range replace {
-		if bytes.Contains(name, k) {
-			found = true
-			break
+	if excName {
+		found = true
+	}
+	if !found {
+		for _, k := range replace {
+			if bytes.Contains(name, k) {
+				found = true
+				break
+			}
 		}
 	}
-	if excGomaxprocs && bytes.IndexByte(name, '-') >= 0 {
+	if !found && excGomaxprocs && bytes.IndexByte(name, '-') >= 0 {
 		found = true
 	}
 	if !found {
@@ -135,7 +147,11 @@ func extractFullExcluded(res *Result, replace [][]byte, excGomaxprocs bool) stri
 	base, parts := res.NameParts()
 	var newName strings.Builder
 	newName.Grow(len(name))
-	newName.Write(base)
+	if excName {
+		newName.WriteByte('*')
+	} else {
+		newName.Write(base)
+	}
 outer:
 	for _, part := range parts {
 		for _, k := range replace {
