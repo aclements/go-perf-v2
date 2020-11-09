@@ -2,6 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// TODO: When matching units, it's not clear if you're matching source
+// file units or tidied units. We could either change benchfmt.Result
+// to be able to track both, or make a Filter accept a tidier and
+// apply it to the query itself, or make Filter canonicalize both
+// units in results and in the query.
+
 package benchproc
 
 import (
