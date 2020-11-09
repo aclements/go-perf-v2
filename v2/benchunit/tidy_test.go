@@ -7,10 +7,9 @@ package benchunit
 import "testing"
 
 func TestTidy(t *testing.T) {
-	var tidier Tidier
 	test := func(unit, tidied string, factor float64) {
 		t.Helper()
-		got, gotFactor := tidier.Tidy(unit)
+		got, gotFactor := TidyUnit(unit)
 		if got != tidied || gotFactor != factor {
 			t.Errorf("for %s, want *%f %s, got *%f %s", unit, factor, tidied, gotFactor, got)
 		}

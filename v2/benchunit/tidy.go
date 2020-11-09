@@ -7,29 +7,35 @@ package benchunit
 import (
 	"strings"
 	"sync"
+
+	"golang.org/x/perf/v2/benchfmt"
 )
 
-// A Tidier rewrites units and values to normalize to base units,
-// specifically normalizing common pre-scaled units like "ns" to "sec"
-// and "MB" to "B". This is important to do before then applying a
-// scaler to values so the scaler doesn't result in nonsense units
-// like "megananoseconds".
-//
-// The zero value of this type is an initialized Tidier. This type
-// provides a type-safe cache of tidied units for performance.
-type Tidier struct {
-	cache sync.Map // unit string -> *tidyCache
-}
-
-type tidyCache struct {
+type tidyEntry struct {
 	tidied string
 	factor float64
 }
 
-// Tidy returns the tidied version of unit and the multiplicative
+var tidyCache sync.Map // unit string -> *tidyCache
+
+// Tidy rewrites units and values in result to normalize them to base
+// units, specifically normalizing common pre-scaled units like "ns"
+// to "sec" and "MB" to "B". This is important to do before then
+// applying a scaler to values so the scaler doesn't result in
+// nonsense units like "megananoseconds".
+func Tidy(result *benchfmt.Result) {
+	for i := range result.Values {
+		tidied, factor := TidyUnit(result.Values[i].Unit)
+		if factor != 1 {
+			result.Values[i] = benchfmt.Value{Value: result.Values[i].Value * factor, Unit: tidied}
+		}
+	}
+}
+
+// TidyUnit returns the tidied version of unit and the multiplicative
 // factor to convert a value in unit "unit" to a value in unit
 // "tidied".
-func (t *Tidier) Tidy(unit string) (tidied string, factor float64) {
+func TidyUnit(unit string) (tidied string, factor float64) {
 	// Fast path for units from testing package.
 	switch unit {
 	case "ns/op":
@@ -45,23 +51,23 @@ func (t *Tidier) Tidy(unit string) (tidied string, factor float64) {
 	}
 
 	// Check the cache.
-	if tc, ok := t.cache.Load(unit); ok {
-		tc := tc.(*tidyCache)
+	if tc, ok := tidyCache.Load(unit); ok {
+		tc := tc.(*tidyEntry)
 		return tc.tidied, tc.factor
 	}
 
 	// Do the hard work and cache it.
 	tidied, factor = tidy(unit)
-	t.cache.Store(unit, &tidyCache{tidied, factor})
+	tidyCache.Store(unit, &tidyEntry{tidied, factor})
 	return
 }
 
-type edit struct {
-	pos, len int
-	replace  string
-}
-
 func tidy(unit string) (tidied string, factor float64) {
+	type edit struct {
+		pos, len int
+		replace  string
+	}
+
 	// The caller has handled the fast paths. Parse the unit.
 	factor = 1
 	p := newParser(unit)
