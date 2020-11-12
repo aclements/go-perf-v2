@@ -24,9 +24,8 @@ func newConfigMaker() *configMaker {
 func (cm *configMaker) new(keyvals ...string) Config {
 	res := &benchfmt.Result{FullName: []byte("Name")}
 	for i := 0; i < len(keyvals); i += 2 {
-		res.FileConfig = append(res.FileConfig, benchfmt.Config{keyvals[i], keyvals[i+1]})
+		res.FileConfig = append(res.FileConfig, benchfmt.Config{keyvals[i], []byte(keyvals[i+1])})
 	}
-	res = res.Clone()
 	cfg, _ := cm.s.Project(res)
 	return cfg
 }

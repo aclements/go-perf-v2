@@ -24,7 +24,7 @@ type Filter struct {
 
 	// extractors records functions for extracting keys for
 	// QueryMatch nodes.
-	extractors map[string]func(*benchfmt.Result) string
+	extractors map[string]func(*benchfmt.Result) []byte
 
 	// usesUnits indicates that the results of this filter may be
 	// different for different units.
@@ -41,7 +41,7 @@ func NewFilter(query string) (*Filter, error) {
 	// Collect extractors for different keys.
 	f := &Filter{
 		query:      q,
-		extractors: make(map[string]func(*benchfmt.Result) string),
+		extractors: make(map[string]func(*benchfmt.Result) []byte),
 	}
 	var walk func(q kvql.Query) error
 	walk = func(q kvql.Query) error {
@@ -151,7 +151,7 @@ func (f *Filter) match(res *benchfmt.Result, node kvql.Query) (m matchBuilder) {
 		if f.usesUnits && node.Key == ".unit" {
 			// Find the units this matches.
 			for i := range res.Values {
-				if node.Match(res.Values[i].Unit) {
+				if node.MatchString(res.Values[i].Unit) {
 					m.set(i)
 				}
 			}

@@ -13,7 +13,7 @@ import (
 
 func TestFilter(t *testing.T) {
 	res := (&benchfmt.Result{
-		FileConfig: []benchfmt.Config{{"f1", "v1"}, {"f2", "v2"}},
+		FileConfig: []benchfmt.Config{{"f1", []byte("v1")}, {"f2", []byte("v2")}},
 		FullName:   []byte("Name/n1=v3"),
 		Values: []benchfmt.Value{
 			{100, "ns/op"},

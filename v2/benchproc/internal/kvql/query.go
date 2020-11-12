@@ -47,7 +47,12 @@ func (q *QueryMatch) String() string {
 }
 
 // Match returns whether q matches the given value of q.Key.
-func (q *QueryMatch) Match(value string) bool {
+func (q *QueryMatch) Match(value []byte) bool {
+	return q.match.Match(value)
+}
+
+// MatchString returns whether q matches the given value of q.Key.
+func (q *QueryMatch) MatchString(value string) bool {
 	return q.match.MatchString(value)
 }
 

@@ -176,7 +176,7 @@ func (p *ProjectionParser) Remainder() *Schema {
 func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, exact []string) error {
 	// Construct the order function.
 	var initField func(node *schemaNode)
-	var match func(a string) bool
+	var match func(a []byte) bool
 	if exact != nil {
 		exactMap := make(map[string]int, len(exact))
 		for i, s := range exact {
@@ -187,8 +187,8 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 				return exactMap[a] < exactMap[b]
 			}
 		}
-		match = func(a string) bool {
-			_, ok := exactMap[a]
+		match = func(a []byte) bool {
+			_, ok := exactMap[string(a)]
 			return ok
 		}
 	} else if order == "first" {
@@ -227,7 +227,7 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 					seen[cfg.Key] = field
 				}
 
-				(*row)[field.idx] = cfg.Value
+				(*row)[field.idx] = s.intern(cfg.Value)
 			}
 			return true
 		}
@@ -252,7 +252,7 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 			if match != nil && !match(val) {
 				return false
 			}
-			(*row)[field.idx] = val
+			(*row)[field.idx] = s.intern(val)
 			return true
 		}
 
@@ -275,7 +275,7 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 			if match != nil && !match(val) {
 				return false
 			}
-			(*row)[field.idx] = val
+			(*row)[field.idx] = s.intern(val)
 			return true
 		}
 	}
@@ -331,6 +331,11 @@ type Schema struct {
 	// row is the buffer used to construct a projection.
 	row []string
 
+	// interns is used to intern []byte to string. These are
+	// always referenced in Configs, so this doesn't cause any
+	// over-retention.
+	interns map[string]string
+
 	// configs are the interned Configs of this Schema.
 	configs map[uint64][]*configNode
 }
@@ -338,6 +343,7 @@ type Schema struct {
 func newSchema() *Schema {
 	var s Schema
 	s.root.idx = -1
+	s.interns = make(map[string]string)
 	s.configs = make(map[uint64][]*configNode)
 	return &s
 }
@@ -555,6 +561,15 @@ func (s *Schema) internRow() Config {
 	config := &configNode{s, append([]string(nil), row...)}
 	s.configs[hash] = append(s.configs[hash], config)
 	return Config{config}
+}
+
+func (s *Schema) intern(b []byte) string {
+	if str, ok := s.interns[string(b)]; ok {
+		return str
+	}
+	str := string(b)
+	s.interns[str] = str
+	return str
 }
 
 // A Config is an immutable tuple mapping from Fields to strings whose
