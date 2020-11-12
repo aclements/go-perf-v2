@@ -19,17 +19,24 @@ package benchfmt
 import "bytes"
 
 // Result is a single benchmark result and all of its measurements.
+//
+// Results are designed to be mutated in place and reused like a
+// "buffer".
 type Result struct {
 	// FileConfig is the set of file-level key/value pairs in
 	// effect for this result.
 	//
-	// Callers should not modify or set this directly and should
-	// instead use SetFileConfig.
+	// This slice is mutable, as are the values in the slice.
+	// Result internally maintains an index of this slice, so
+	// callers must use SetFileConfig to add or delete keys, but
+	// may modify values in place. There is one exception to this:
+	// for convenience, Results can be initialized directly, e.g.,
+	// using a struct literal.
 	//
-	// This is modified in place. New keys are appended to the
-	// slice. When an existing key changes value, it is updated in
-	// place. When a key is deleted, its Value is set to "". As a
-	// consequence, consumers can cache the indexes of keys.
+	// New file configuration keys are appended to this slice.
+	// Updated keys are changed in place. When a key is deleted,
+	// the last key in the slice is swapped to fill the hole. This
+	// way, the order of these keys is deterministic.
 	FileConfig []Config
 
 	// FullName is the full name of this benchmark, including all
@@ -43,23 +50,25 @@ type Result struct {
 	// Values is this benchmark's measurements and their units.
 	Values []Value
 
-	// configPos, if non-nil, maps from Config.Key to index in
-	// FileConfig.
+	// configPos maps from Config.Key to index in FileConfig. This
+	// may be nil, which indicates the index needs to be
+	// constructed.
 	configPos map[string]int
-
-	// permConfig indicates that FileConfig[:permConfig] cannot be
-	// overridden.
-	permConfig int
-
-	// nameParts is a cache of the split parts of FullName. Its
-	// length is 0 if it has not been computed.
-	nameParts [][]byte
 }
 
 // Config is a single key/value configuration pair.
 type Config struct {
-	Key, Value string
+	Key   string
+	Value []byte
 }
+
+// Note: I tried many approaches to Config. Using two strings is nice
+// for the API, but forces a lot of allocation in extractors (since
+// they either need to convert strings to []byte or vice-versa). Using
+// a []byte for Value makes it slightly harder to use, but is good for
+// reusing space efficiently (Value is likely to have more distinct
+// values than Key) and lets all extractors work in terms of []byte
+// views. Making Key a []byte is basically all downside.
 
 // Value is a single value/unit measurement from a benchmark result.
 type Value struct {
@@ -69,49 +78,82 @@ type Value struct {
 
 // Clone makes a copy of Result that shares no state with r.
 func (r *Result) Clone() *Result {
-	// All of these slices share no sub-structure.
 	r2 := &Result{
-		FileConfig: append([]Config(nil), r.FileConfig...),
+		FileConfig: make([]Config, len(r.FileConfig)),
 		FullName:   append([]byte(nil), r.FullName...),
 		Iters:      r.Iters,
 		Values:     append([]Value(nil), r.Values...),
-		permConfig: r.permConfig,
+	}
+	for i, cfg := range r.FileConfig {
+		r2.FileConfig[i].Key = cfg.Key
+		r2.FileConfig[i].Value = append([]byte(nil), cfg.Value...)
 	}
 	return r2
 }
 
-// setFileConfig sets file configuration key to value, overriding or
-// adding the configuration as necessary. perm indicates that this is
-// a permanent config value that cannot be overridden by a file.
-func (r *Result) setFileConfig(key, value string, perm bool) {
+// SetFileConfig sets file configuration key to value, overriding or
+// adding the configuration as necessary. If value is "", it deletes
+// key.
+func (r *Result) SetFileConfig(key, value string) {
+	if value == "" {
+		r.deleteFileConfig(key)
+	} else {
+		cfg := r.ensureFileConfig(key)
+		cfg.Value = append(cfg.Value[:0], value...)
+	}
+}
+
+func (r *Result) ensureFileConfig(key string) *Config {
 	pos, ok := r.FileConfigIndex(key)
 	if ok {
-		if !perm && pos < r.permConfig {
-			// Cannot override permanent config.
-			return
-		}
-		r.FileConfig[pos].Value = value
+		return &r.FileConfig[pos]
+	}
+	// Add key. Reuse old space if possible.
+	r.configPos[key] = len(r.FileConfig)
+	if len(r.FileConfig) < cap(r.FileConfig) {
+		r.FileConfig = r.FileConfig[:len(r.FileConfig)+1]
+		cfg := &r.FileConfig[len(r.FileConfig)-1]
+		cfg.Key = key
+		return cfg
+	}
+	r.FileConfig = append(r.FileConfig, Config{key, nil})
+	return &r.FileConfig[len(r.FileConfig)-1]
+}
+
+func (r *Result) deleteFileConfig(key string) {
+	pos, ok := r.FileConfigIndex(key)
+	if !ok {
 		return
 	}
-	pos = len(r.FileConfig)
-	if perm {
-		if pos != r.permConfig {
-			panic("setting permanent file config after reading file")
-		}
-		r.permConfig = pos + 1
+	// Delete key.
+	cfg := &r.FileConfig[pos]
+	cfg2 := &r.FileConfig[len(r.FileConfig)-1]
+	*cfg, *cfg2 = *cfg2, *cfg
+	r.configPos[cfg.Key] = pos
+	r.FileConfig = r.FileConfig[:len(r.FileConfig)-1]
+	delete(r.configPos, key)
+}
+
+// GetFileConfig returns the value of a file configuration key, or ""
+// if not present.
+func (r *Result) GetFileConfig(key string) string {
+	pos, ok := r.FileConfigIndex(key)
+	if !ok {
+		return ""
 	}
-	r.FileConfig = append(r.FileConfig, Config{key, value})
-	r.configPos[key] = pos
+	return string(r.FileConfig[pos].Value)
 }
 
 // FileConfigIndex returns the index in r.FileConfig of key.
 func (r *Result) FileConfigIndex(key string) (pos int, ok bool) {
 	if r.configPos == nil {
+		// This is a fresh Result. Construct the index.
 		r.configPos = make(map[string]int)
 		for i, cfg := range r.FileConfig {
 			r.configPos[cfg.Key] = i
 		}
 	}
+
 	pos, ok = r.configPos[key]
 	return
 }
@@ -126,22 +168,20 @@ func (r *Result) Value(unit string) (float64, bool) {
 	return 0, false
 }
 
-// BaseName returns the base part of r's name, without any
-// configuration keys or GOMAXPROCS.
-func (r *Result) BaseName() []byte {
-	if len(r.nameParts) > 0 {
-		return r.nameParts[0]
+// BaseName returns the base part of a full benchmark name, without
+// any configuration keys or GOMAXPROCS.
+func BaseName(fullName []byte) []byte {
+	slash := bytes.IndexByte(fullName, '/')
+	if slash >= 0 {
+		return fullName[:slash]
 	}
-	buf, _ := r.splitGomaxprocs()
-	slash := bytes.IndexByte(buf, '/')
-	if slash < 0 {
-		return buf
-	}
-	return buf[:slash]
+	base, _ := splitGomaxprocs(fullName)
+	return base
 }
 
-// NameParts returns the base name and sub-benchmark configuration
-// parts. Each sub-benchmark configuration part is one of three forms:
+// NameParts splits a full benchmark name into the base name and
+// sub-benchmark configuration parts. Each sub-benchmark configuration
+// part is one of three forms:
 //
 // 1. "/<key>=<value>" indicates a key/value configuration pair.
 //
@@ -152,28 +192,26 @@ func (r *Result) BaseName() []byte {
 //
 // Concatenating the base name and the configuration parts
 // reconstructs the full name.
-func (r *Result) NameParts() (baseName []byte, parts [][]byte) {
-	if len(r.nameParts) == 0 {
-		// First pull off any GOMAXPROCS.
-		buf, gomaxprocs := r.splitGomaxprocs()
-		// Split the remaining parts.
-		prev := 0
-		for i, c := range buf {
-			if c == '/' {
-				r.nameParts = append(r.nameParts, buf[prev:i])
-				prev = i
-			}
-		}
-		r.nameParts = append(r.nameParts, buf[prev:])
-		if gomaxprocs != nil {
-			r.nameParts = append(r.nameParts, gomaxprocs)
+func NameParts(fullName []byte) (baseName []byte, parts [][]byte) {
+	// First pull off any GOMAXPROCS.
+	buf, gomaxprocs := splitGomaxprocs(fullName)
+	// Split the remaining parts.
+	var nameParts [][]byte
+	prev := 0
+	for i, c := range buf {
+		if c == '/' {
+			nameParts = append(nameParts, buf[prev:i])
+			prev = i
 		}
 	}
-	return r.nameParts[0], r.nameParts[1:]
+	nameParts = append(nameParts, buf[prev:])
+	if gomaxprocs != nil {
+		nameParts = append(nameParts, gomaxprocs)
+	}
+	return nameParts[0], nameParts[1:]
 }
 
-func (r *Result) splitGomaxprocs() (prefix, gomaxprocs []byte) {
-	buf := r.FullName
+func splitGomaxprocs(buf []byte) (prefix, gomaxprocs []byte) {
 	for i := len(buf) - 1; i >= 0; i-- {
 		if buf[i] == '-' && i < len(buf)-1 {
 			return buf[:i], buf[i:]

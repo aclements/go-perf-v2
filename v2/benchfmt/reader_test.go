@@ -56,14 +56,12 @@ func errResult(msg string) *Result {
 }
 
 func r(cfg []Config, fullName string, iters int, vals []Value) *Result {
-	// Make the Result and Clone it to populate internal
-	// structures.
-	return (&Result{
+	return &Result{
 		FileConfig: cfg,
 		FullName:   []byte(fullName),
 		Iters:      iters,
 		Values:     vals,
-	}).Clone()
+	}
 }
 
 func TestReader(t *testing.T) {
@@ -79,15 +77,39 @@ BenchmarkOne 100 1 ns/op 2 B/op
 BenchmarkTwo 300 4.5 ns/op
 `,
 			[]*Result{r(
-				[]Config{{"key", "value"}},
+				[]Config{{"key", []byte("value")}},
 				"One",
 				100,
 				[]Value{{1, "ns/op"}, {2, "B/op"}},
 			), r(
-				[]Config{{"key", "value"}},
+				[]Config{{"key", []byte("value")}},
 				"Two",
 				300,
 				[]Value{{4.5, "ns/op"}},
+			)},
+		},
+		{
+			"weird",
+			`
+BenchmarkSpaces    1   1   ns/op
+BenchmarkHugeVal 1 9999999999999999999999999999999 ns/op
+BenchmarkEmSpace  1  1  ns/op
+`,
+			[]*Result{r(
+				[]Config{},
+				"Spaces",
+				1,
+				[]Value{{1, "ns/op"}},
+			), r(
+				[]Config{},
+				"HugeVal",
+				1,
+				[]Value{{9999999999999999999999999999999, "ns/op"}},
+			), r(
+				[]Config{},
+				"EmSpace",
+				1,
+				[]Value{{1, "ns/op"}},
 			)},
 		},
 		{
@@ -97,10 +119,11 @@ BenchmarkTwo 300 4.5 ns/op
 ab:not a key
 a b: also not a key
 key2: value
+
 BenchmarkOne 100 1 ns/op
 `,
 			[]*Result{r(
-				[]Config{{"key1", "value"}, {"key2", "value"}},
+				[]Config{{"key1", []byte("value")}, {"key2", []byte("value")}},
 				"One",
 				100,
 				[]Value{{1, "ns/op"}},
@@ -135,7 +158,7 @@ key:
 BenchmarkOne 100 1 ns/op
 `,
 			[]*Result{r(
-				[]Config{{"key", ""}},
+				[]Config{},
 				"One",
 				100,
 				[]Value{{1, "ns/op"}},
@@ -149,7 +172,7 @@ key1: third
 BenchmarkOne 100 1 ns/op
 `,
 			[]*Result{r(
-				[]Config{{"key1", "third"}, {"key2", "second"}},
+				[]Config{{"key1", []byte("third")}, {"key2", []byte("second")}},
 				"One",
 				100,
 				[]Value{{1, "ns/op"}},
@@ -178,34 +201,6 @@ BenchmarkOne 100 1 ns/op
 				t.Error(diff.String())
 			}
 		})
-	}
-}
-
-func TestSetFileConfig(t *testing.T) {
-	data := `
-key: value
-override: file
-BenchmarkOne 100 1 ns/op`
-	got := parseAll(t, data, func(r *Reader) {
-		r.SetFileConfig("override", "program")
-	})
-	want := r(
-		[]Config{{"override", "program"}, {"key", "value"}},
-		"One",
-		100,
-		[]Value{{1, "ns/op"}},
-	)
-	want.permConfig = 1
-	if len(got) != 1 {
-		t.Fatalf("got %d results, expected 1", len(got))
-	}
-	if !reflect.DeepEqual(got[0], want) {
-		var diff bytes.Buffer
-		fmt.Fprintf(&diff, "got:\n")
-		printResult(&diff, got[0])
-		fmt.Fprintf(&diff, "want:\n")
-		printResult(&diff, want)
-		t.Error(diff.String())
 	}
 }
 
@@ -254,48 +249,4 @@ func BenchmarkReader(b *testing.B) {
 	b.StopTimer()
 	b.ReportMetric(float64(n/b.N), "records/op")
 	b.ReportMetric(float64(n)*float64(time.Second)/float64(dur), "records/sec")
-}
-
-func TestNameParts(t *testing.T) {
-	s := func(xs ...string) []string { return xs }
-	type testCase struct {
-		fullName string
-		baseName string
-		parts    []string
-	}
-	for _, test := range []testCase{
-		{"Test", "Test", s()},
-		// Subtests
-		{"Test/a/b", "Test", s("/a", "/b")},
-		// Gomaxprocs
-		{"Test/a/b-1", "Test", s("/a", "/b", "-1")},
-		// Looks like gomaxprocs, but isn't
-		{"Test/a/b-c", "Test", s("/a", "/b-c")},
-		{"Test/a-1/b", "Test", s("/a-1", "/b")},
-		// Empty name
-		{"", "", s()},
-		{"/a/b", "", s("/a", "/b")},
-	} {
-		r := Result{FullName: []byte(test.fullName)}
-		baseName, parts := r.NameParts()
-
-		mismatch := ""
-		if string(baseName) != test.baseName {
-			mismatch += ", base name"
-		}
-		if len(parts) != len(test.parts) {
-			mismatch += ", parts"
-		} else {
-			for i, part := range parts {
-				if string(part) != test.parts[i] {
-					mismatch += ", parts"
-					break
-				}
-			}
-		}
-
-		if mismatch != "" {
-			t.Errorf("parsing %q, mismatch on %s", test.fullName, mismatch[2:])
-		}
-	}
 }

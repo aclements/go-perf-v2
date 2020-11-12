@@ -9,7 +9,7 @@ import "testing"
 func checkNameExtractor(t *testing.T, x Extractor, fullName string, want string) {
 	t.Helper()
 	res := &Result{FullName: []byte(fullName)}
-	got := x(res)
+	got := string(x(res))
 	if got != want {
 		t.Errorf("got %s, want %s", got, want)
 	}
@@ -104,15 +104,15 @@ func TestExtractFileKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := r([]Config{{"file-key", "123"}, {"other-key", "456"}}, "Name", 1, nil)
-	got := x(res)
+	res := r([]Config{{"file-key", []byte("123")}, {"other-key", []byte("456")}}, "Name", 1, nil)
+	got := string(x(res))
 	want := "123"
 	if got != want {
 		t.Errorf("got %s, want %s", got, want)
 	}
 
-	res = r([]Config{{"other-key", "456"}}, "Name", 1, nil)
-	got = x(res)
+	res = r([]Config{{"other-key", []byte("456")}}, "Name", 1, nil)
+	got = string(x(res))
 	want = ""
 	if got != want {
 		t.Errorf("got %s, want %s", got, want)

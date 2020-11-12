@@ -59,8 +59,7 @@ func NewReader(r io.Reader, fileName string) *Reader {
 }
 
 // Reset resets the reader to begin reading from a new input. This
-// also resets all of the file-level configuration values, including
-// those set by SetFileConfig.
+// also resets all of the file-level configuration values.
 func (r *Reader) Reset(ior io.Reader, fileName string) {
 	r.s = bufio.NewScanner(ior)
 	if fileName == "" {
@@ -70,27 +69,18 @@ func (r *Reader) Reset(ior io.Reader, fileName string) {
 	r.lineNum = 0
 	r.err = nil
 	r.resultErr = noResult
-
-	// Wipe the file config. We have to keep the keys in place for
-	// consumers that have cached indexes, so we do the equivalent
-	// of deleting all the keys.
-	for i := range r.result.FileConfig {
-		r.result.FileConfig[i].Value = ""
-	}
-	r.result.FullName = r.result.FullName[:0]
-	r.result.Iters = 0
-	r.result.Values = r.result.Values[:0]
-	r.result.nameParts = r.result.nameParts[:0]
-
 	if r.interns == nil {
 		r.interns = make(map[string]string)
 	}
-}
 
-// SetFileConfig injects a file-level key/value configuration. Keys
-// set with SetFileConfig cannot be overridden by the file.
-func (r *Reader) SetFileConfig(key, val string) {
-	r.result.setFileConfig(key, val, true)
+	// Wipe the Result.
+	r.result.FileConfig = r.result.FileConfig[:0]
+	r.result.FullName = r.result.FullName[:0]
+	r.result.Iters = 0
+	r.result.Values = r.result.Values[:0]
+	for k := range r.result.configPos {
+		delete(r.result.configPos, k)
+	}
 }
 
 var benchmarkPrefix = []byte("Benchmark")
@@ -123,15 +113,13 @@ func (r *Reader) Scan() bool {
 		} else if key, val, ok := parseKeyValueLine(line); ok {
 			// Intern key, since there tend to be few
 			// unique keys.
-			//
-			// I experimented with making Config.Value a
-			// []byte. While that obviously reduced
-			// allocation here, it didn't make any
-			// different performance-wise, and made the
-			// API much less friendly.
 			keyStr := r.intern(key)
-			valStr := string(val)
-			r.result.setFileConfig(keyStr, valStr, false)
+			if len(val) == 0 {
+				r.result.deleteFileConfig(keyStr)
+			} else {
+				cfg := r.result.ensureFileConfig(keyStr)
+				cfg.Value = append(cfg.Value[:0], val...)
+			}
 		}
 		// Ignore the line.
 	}
@@ -196,7 +184,6 @@ func (r *Reader) parseBenchmarkLine(line []byte) error {
 
 	// Read the name.
 	r.result.FullName, line = splitField(line)
-	r.result.nameParts = r.result.nameParts[:0] // Invalidate name cache
 
 	// Read the iteration count.
 	f, line = splitField(line)

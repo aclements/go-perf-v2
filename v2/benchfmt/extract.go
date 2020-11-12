@@ -10,8 +10,10 @@ import (
 	"strings"
 )
 
-// An Extractor returns some component of a benchmark result.
-type Extractor func(*Result) string
+// An Extractor returns some component of a benchmark result. The
+// result may be a view into a mutable []byte in *Result, so may
+// change if the Result is modified.
+type Extractor func(*Result) []byte
 
 // NewExtractor returns a function that extracts some component of a
 // benchmark result.
@@ -46,12 +48,12 @@ func NewExtractor(key string) (Extractor, error) {
 		copy(prefix, key)
 		prefix[len(prefix)-1] = '='
 		isGomaxprocs := key == "/gomaxprocs"
-		return func(res *Result) string {
+		return func(res *Result) []byte {
 			return extractNamePart(res, prefix, isGomaxprocs)
 		}, nil
 	}
 
-	return func(res *Result) string {
+	return func(res *Result) []byte {
 		return extractFileKey(res, key)
 	}, nil
 }
@@ -84,20 +86,20 @@ func NewExtractorFullName(exclude []string) Extractor {
 	if len(replace) == 0 && !excName && !excGomaxprocs {
 		return extractFull
 	}
-	return func(res *Result) string {
+	return func(res *Result) []byte {
 		return extractFullExcluded(res, replace, excName, excGomaxprocs)
 	}
 }
 
-func extractName(res *Result) string {
-	return string(res.BaseName())
+func extractName(res *Result) []byte {
+	return BaseName(res.FullName)
 }
 
-func extractFull(res *Result) string {
-	return string(res.FullName)
+func extractFull(res *Result) []byte {
+	return res.FullName
 }
 
-func extractFullExcluded(res *Result, replace [][]byte, excName, excGomaxprocs bool) string {
+func extractFullExcluded(res *Result, replace [][]byte, excName, excGomaxprocs bool) []byte {
 	name := res.FullName
 	found := false
 	if excName {
@@ -116,60 +118,57 @@ func extractFullExcluded(res *Result, replace [][]byte, excName, excGomaxprocs b
 	}
 	if !found {
 		// No need to transform name.
-		return string(name)
+		return name
 	}
 
 	// Normalize excluded keys from the name.
-	base, parts := res.NameParts()
-	var newName strings.Builder
-	newName.Grow(len(name))
+	base, parts := NameParts(res.FullName)
+	var newName []byte
 	if excName {
-		newName.WriteByte('*')
+		newName = append(newName, '*')
 	} else {
-		newName.Write(base)
+		newName = append(newName, base...)
 	}
 outer:
 	for _, part := range parts {
 		for _, k := range replace {
 			if bytes.HasPrefix(part, k) {
-				newName.Write(k)
-				newName.WriteByte('*')
+				newName = append(append(newName, k...), '*')
 				continue outer
 			}
 		}
 		if excGomaxprocs && part[0] == '-' {
-			newName.WriteString("-*")
+			newName = append(newName, "-*"...)
 			continue outer
 		}
-		newName.Write(part)
+		newName = append(newName, part...)
 	}
-	return newName.String()
+	return newName
 }
 
-func extractNamePart(res *Result, prefix []byte, isGomaxprocs bool) string {
-	_, parts := res.NameParts()
+func extractNamePart(res *Result, prefix []byte, isGomaxprocs bool) []byte {
+	_, parts := NameParts(res.FullName)
 	if isGomaxprocs && len(parts) > 0 {
 		last := parts[len(parts)-1]
 		if last[0] == '-' {
 			// GOMAXPROCS specified as "-N" suffix.
-			return string(last[1:])
+			return last[1:]
 		}
 	}
 	// Search for the prefix.
 	for _, part := range parts {
 		if bytes.HasPrefix(part, prefix) {
-			return string((part[len(prefix):]))
+			return part[len(prefix):]
 		}
 	}
 	// Not found.
-	return ""
+	return nil
 }
 
-func extractFileKey(res *Result, key string) string {
+func extractFileKey(res *Result, key string) []byte {
 	pos, ok := res.FileConfigIndex(key)
-	val := ""
-	if ok {
-		val = res.FileConfig[pos].Value
+	if !ok {
+		return nil
 	}
-	return val
+	return res.FileConfig[pos].Value
 }
