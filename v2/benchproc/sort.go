@@ -12,10 +12,10 @@ func (c Config) Less(o Config) bool {
 	if c.c.schema != o.c.schema {
 		panic("cannot compare Configs from different Schemas")
 	}
-	return less(c.c.schema.flat(), c.c.vals, o.c.vals)
+	return less(c.c.schema.Fields(), c.c.vals, o.c.vals)
 }
 
-func less(flat []*schemaNode, a, b []string) bool {
+func less(flat []Field, a, b []string) bool {
 	// Walk the tuples in schema order.
 	for _, node := range flat {
 		var aa, bb string
@@ -50,7 +50,7 @@ func SortConfigs(configs []Config) {
 		return
 	}
 	s := commonSchema(configs)
-	flat := s.flat()
+	flat := s.Fields()
 
 	sort.Slice(configs, func(i, j int) bool {
 		return less(flat, configs[i].c.vals, configs[j].c.vals)

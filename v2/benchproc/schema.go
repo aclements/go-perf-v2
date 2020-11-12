@@ -175,15 +175,15 @@ func (p *ProjectionParser) Remainder() *Schema {
 
 func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, exact []string) error {
 	// Construct the order function.
-	var initField func(node *schemaNode)
+	var initField func(field Field)
 	var match func(a []byte) bool
 	if exact != nil {
 		exactMap := make(map[string]int, len(exact))
 		for i, s := range exact {
 			exactMap[s] = i
 		}
-		initField = func(node *schemaNode) {
-			node.less = func(a, b string) bool {
+		initField = func(field Field) {
+			field.less = func(a, b string) bool {
 				return exactMap[a] < exactMap[b]
 			}
 		}
@@ -192,12 +192,12 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 			return ok
 		}
 	} else if order == "first" {
-		initField = func(node *schemaNode) {
-			node.order = make(map[string]int)
+		initField = func(field Field) {
+			field.order = make(map[string]int)
 		}
 	} else if less, ok := builtinOrders[order]; ok {
-		initField = func(node *schemaNode) {
-			node.less = less
+		initField = func(field Field) {
+			field.less = less
 		}
 	} else {
 		return fmt.Errorf("unknown order %q", order)
@@ -213,8 +213,8 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 			return fmt.Errorf("exact order not allowed for .config")
 		}
 		p.haveConfig = true
-		group := s.addGroup(nil, ".config")
-		seen := make(map[string]*schemaNode)
+		group := s.addGroup(s.root, ".config")
+		seen := make(map[string]Field)
 		project = func(r *benchfmt.Result, row *[]string) bool {
 			for _, cfg := range r.FileConfig {
 				field, ok := seen[cfg.Key]
@@ -242,7 +242,7 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 		// TODO: Does this handle excluding empty keys vs
 		// missing keys from the fullname correctly?
 		p.haveFullname = true
-		field := s.addField(nil, ".fullname")
+		field := s.addField(s.root, ".fullname")
 		initField(field)
 		project = func(r *benchfmt.Result, row *[]string) bool {
 			if p.fullExtractor == nil {
@@ -268,7 +268,7 @@ func (p *ProjectionParser) makeProjection(s *Schema, key string, order string, e
 		if err != nil {
 			return err
 		}
-		field := s.addField(nil, key)
+		field := s.addField(s.root, key)
 		initField(field)
 		project = func(r *benchfmt.Result, row *[]string) bool {
 			val := ext(r)
@@ -311,15 +311,16 @@ var builtinOrders = map[string]func(a, b string) bool{
 // lexicographic based on the order of fields in the Schema, with the
 // order of each individual field determined by the projection.
 type Schema struct {
-	root    schemaNode
+	root    Field
 	nFields int
 
-	// unitNode, if non-nil, is the ".unit" field used to project
+	// unitField, if non-nil, is the ".unit" field used to project
 	// the values of a benchmark result.
-	unitNode *schemaNode
+	unitField Field
 
-	// flatCache, if non-nil, contains the flattened schema.
-	flatCache []*schemaNode
+	// flatCache, if non-nil, contains the flattened sequence of
+	// fields.
+	flatCache []Field
 
 	// project is a set of functions that project a Result into
 	// row.
@@ -342,61 +343,32 @@ type Schema struct {
 
 func newSchema() *Schema {
 	var s Schema
-	s.root.idx = -1
+	s.root.fieldInternal = &fieldInternal{idx: -1}
 	s.interns = make(map[string]string)
 	s.configs = make(map[uint64][]*configNode)
 	return &s
 }
 
-// A schemaNode is a field or group in a Schema.
-type schemaNode struct {
-	name string
-
-	// idx gives the index of this field's values in a configNode.
-	// Indexes are assigned sequentially as fields are added,
-	// regardless of the order of those fields in the Schema. This
-	// allows new fields to be added to a schema without
-	// invalidating existing Configs.
-	//
-	// idx is -1 for group nodes.
-	idx int
-	sub []*schemaNode // sub-nodes for groups
-
-	// less is the comparison function for this field. If nil, use
-	// the observation order.
-	less func(a, b string) bool
-
-	// order, if non-nil, records the observation order of this
-	// field.
-	order map[string]int
-}
-
-func (s *Schema) addField(group *schemaNode, name string) *schemaNode {
-	if group == nil {
-		group = &s.root
-	}
+func (s *Schema) addField(group Field, name string) Field {
 	if group.idx != -1 {
 		panic("field's parent is not a group")
 	}
 
 	// Assign this field an index.
-	node := &schemaNode{name: name, idx: s.nFields}
+	field := Field{name, &fieldInternal{schema: s, idx: s.nFields}}
 	s.nFields++
-	group.sub = append(group.sub, node)
+	group.sub = append(group.sub, field)
 	// Add to the row buffer.
 	s.row = append(s.row, "")
 	// Clear the current flattening.
 	s.flatCache = nil
-	return node
+	return field
 }
 
-func (s *Schema) addGroup(group *schemaNode, name string) *schemaNode {
-	if group == nil {
-		group = &s.root
-	}
-	node := &schemaNode{name: name, idx: -1}
-	group.sub = append(group.sub, node)
-	return node
+func (s *Schema) addGroup(group Field, name string) Field {
+	field := Field{name, &fieldInternal{schema: s, idx: -1}}
+	group.sub = append(group.sub, field)
+	return field
 }
 
 // AddValues appends a field to this Schema called ".unit" used to
@@ -409,32 +381,11 @@ func (s *Schema) addGroup(group *schemaNode, name string) *schemaNode {
 // some dimension of a set of Schemas. Adding a .unit field makes this
 // easy.
 func (s *Schema) AddValues() Field {
-	if s.unitNode != nil {
+	if s.unitField.fieldInternal != nil {
 		panic("Schema already has a .unit field")
 	}
-	s.unitNode = s.addField(nil, ".unit")
-	return Field{s.unitNode.name, s, s.unitNode}
-}
-
-// flat returns the flattened schema.
-func (s *Schema) flat() []*schemaNode {
-	if s.flatCache != nil {
-		return s.flatCache
-	}
-
-	s.flatCache = make([]*schemaNode, 0, s.nFields)
-	var walk func(n *schemaNode)
-	walk = func(n *schemaNode) {
-		if n.idx != -1 {
-			s.flatCache = append(s.flatCache, n)
-		} else {
-			for _, sub := range n.sub {
-				walk(sub)
-			}
-		}
-	}
-	walk(&s.root)
-	return s.flatCache
+	s.unitField = s.addField(s.root, ".unit")
+	return s.unitField
 }
 
 // Fields returns the fields of s in the order determined by the
@@ -442,20 +393,56 @@ func (s *Schema) flat() []*schemaNode {
 // zero or more fields. Calling s.Project can cause more fields to be
 // added to s (for example, if the Result has a new file configuration
 // key).
+//
+// The caller must not modify the returned slice.
 func (s *Schema) Fields() []Field {
-	nodes := s.flat()
-	fields := make([]Field, len(nodes))
-	for i, node := range nodes {
-		fields[i] = Field{node.name, s, node}
+	if s.flatCache != nil {
+		return s.flatCache
 	}
-	return fields
+
+	s.flatCache = make([]Field, 0, s.nFields)
+	var walk func(f Field)
+	walk = func(f Field) {
+		if f.idx != -1 {
+			s.flatCache = append(s.flatCache, f)
+		} else {
+			for _, sub := range f.sub {
+				walk(sub)
+			}
+		}
+	}
+	walk(s.root)
+	return s.flatCache
 }
 
 // A Field is a single dimension of a Schema.
 type Field struct {
-	Name   string
+	Name string
+	*fieldInternal
+}
+
+// A fieldInternal is the internal representation of a field or group
+// in a Schema.
+type fieldInternal struct {
 	schema *Schema
-	node   *schemaNode
+
+	// idx gives the index of this field's values in a configNode.
+	// Indexes are assigned sequentially as fields are added,
+	// regardless of the order of those fields in the Schema. This
+	// allows new fields to be added to a schema without
+	// invalidating existing Configs.
+	//
+	// idx is -1 for group nodes.
+	idx int
+	sub []Field // sub-nodes for groups
+
+	// less is the comparison function for this field. If nil, use
+	// the observation order.
+	less func(a, b string) bool
+
+	// order, if non-nil, records the observation order of this
+	// field.
+	order map[string]int
 }
 
 var configSeed = maphash.MakeSeed()
@@ -485,7 +472,7 @@ func (s *Schema) ProjectValues(r *benchfmt.Result) ([]Config, bool) {
 		return nil, false
 	}
 	out := make([]Config, len(r.Values))
-	if s.unitNode == nil {
+	if s.unitField.fieldInternal == nil {
 		// There's no .unit, so the Configs will all be the same.
 		cfg := s.internRow()
 		for i := range out {
@@ -495,7 +482,7 @@ func (s *Schema) ProjectValues(r *benchfmt.Result) ([]Config, bool) {
 	}
 	// Vary the .unit field.
 	for i, val := range r.Values {
-		s.row[s.unitNode.idx] = val.Unit
+		s.row[s.unitField.idx] = val.Unit
 		out[i] = s.internRow()
 	}
 	return out, true
@@ -543,17 +530,17 @@ func (s *Schema) internRow() Config {
 	}
 
 	// Update observation orders.
-	for _, node := range s.flat() {
-		if node.order == nil {
+	for _, field := range s.Fields() {
+		if field.order == nil {
 			// Not tracking observation order for this field.
 			continue
 		}
 		var val string
-		if node.idx < len(row) {
-			val = row[node.idx]
+		if field.idx < len(row) {
+			val = row[field.idx]
 		}
-		if _, ok := node.order[val]; !ok {
-			node.order[val] = len(node.order)
+		if _, ok := field.order[val]; !ok {
+			field.order[val] = len(field.order)
 		}
 	}
 
@@ -596,7 +583,7 @@ func (c Config) Get(f Field) string {
 	if c.c.schema != f.schema {
 		panic("Config and Field have different Schemas")
 	}
-	idx := f.node.idx
+	idx := f.idx
 	if idx >= len(c.c.vals) {
 		return ""
 	}
@@ -618,18 +605,18 @@ func (c Config) String() string {
 		return "<zero>"
 	}
 	buf := new(strings.Builder)
-	for _, node := range c.c.schema.flat() {
-		if node.idx >= len(c.c.vals) {
+	for _, field := range c.c.schema.Fields() {
+		if field.idx >= len(c.c.vals) {
 			continue
 		}
-		val := c.c.vals[node.idx]
+		val := c.c.vals[field.idx]
 		if val == "" {
 			continue
 		}
 		if buf.Len() > 0 {
 			buf.WriteByte(' ')
 		}
-		buf.WriteString(node.name)
+		buf.WriteString(field.Name)
 		buf.WriteByte(':')
 		buf.WriteString(val)
 	}
