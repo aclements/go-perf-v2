@@ -9,27 +9,27 @@ import "golang.org/x/perf/v2/benchproc"
 // globalOrder takes a list of locally ordered config sequences from
 // lowest to highest priority and returns a global order that combines
 // the local orders.
-func globalOrder(local [][]*benchproc.Config) []*benchproc.Config {
+func globalOrder(local [][]benchproc.Config) []benchproc.Config {
 	// Make a graph that combines the orders.
 	type node struct {
-		succs   []*benchproc.Config // Successors in priority order
-		set     map[*benchproc.Config]struct{}
+		succs   []benchproc.Config // Successors in priority order
+		set     map[benchproc.Config]struct{}
 		visited bool
 	}
-	nodes := make(map[*benchproc.Config]*node)
+	nodes := make(map[benchproc.Config]*node)
 	for i := len(local) - 1; i >= 0; i-- {
 		cfgs := local[i]
-		var succ *benchproc.Config
+		var succ benchproc.Config
 		for i := len(cfgs) - 1; i >= 0; i-- {
 			cfg := cfgs[i]
 
 			// Create node for config.
 			cfgNode := nodes[cfg]
 			if cfgNode == nil {
-				cfgNode = &node{set: make(map[*benchproc.Config]struct{})}
+				cfgNode = &node{set: make(map[benchproc.Config]struct{})}
 				nodes[cfg] = cfgNode
 			}
-			if succ != nil {
+			if !succ.IsZero() {
 				// Add a cfg -> succ edge.
 				if _, ok := cfgNode.set[succ]; !ok {
 					cfgNode.succs = append(cfgNode.succs, succ)
@@ -43,9 +43,9 @@ func globalOrder(local [][]*benchproc.Config) []*benchproc.Config {
 
 	// Topologically sort the graph, using the first configuration
 	// in each sequence as a root and biasing by edge priority.
-	var order []*benchproc.Config
-	var dfs func(cfg *benchproc.Config)
-	dfs = func(cfg *benchproc.Config) {
+	var order []benchproc.Config
+	var dfs func(cfg benchproc.Config)
+	dfs = func(cfg benchproc.Config) {
 		node := nodes[cfg]
 		if node.visited {
 			return

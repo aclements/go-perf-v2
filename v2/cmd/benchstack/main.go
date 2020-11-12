@@ -13,6 +13,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -67,7 +68,9 @@ type Scales struct {
 
 	// Colors assigns colors to phases based on the adjacent phase
 	// graph.
-	Colors map[*benchproc.Config]color.Color
+	Colors map[benchproc.Config]color.Color
+
+	PhaseField benchproc.Field
 }
 
 func expandScale(s *scale.Linear, min, max float64) {
@@ -102,15 +105,12 @@ func (s *SVG) GenID(prefix string) string {
 }
 
 type unitInfo struct {
-	cfg        *benchproc.Config
-	tidyUnit   string
-	tidyFactor float64
-	class      benchunit.UnitClass
-	newCells   func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
+	class    benchunit.UnitClass
+	newCells func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
 }
 
 func main() {
-	flagCol := flag.String("col", "branch,commit-date", "split columns by distinct values of `projection`")
+	flagCol := flag.String("col", "branch,commit-date,commit", "split columns by distinct values of `projection`")
 	flagRow := flag.String("row", "benchmark,/kind", "split rows by distinct values of `projection`")
 	flagFilter := flag.String("filter", "*", "use only benchmarks matching benchfilter `query`")
 	flag.Parse()
@@ -125,43 +125,49 @@ func main() {
 		log.Fatal(err)
 	}
 
-	cs := new(benchproc.ConfigSet)
-
-	parseOpts := benchproc.ParseOpts{}
-	groupBys, err := benchproc.ParseProjectionBundle([]string{*flagCol, *flagRow}, parseOpts)
+	var parser benchproc.ProjectionParser
+	colBy, err := parser.Parse(*flagCol)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parsing -col and -row: %s", err)
+		fmt.Fprintf(os.Stderr, "parsing -col: %s", err)
 		os.Exit(1)
 	}
-	colBy, rowBy := groupBys[0], groupBys[1]
-	phaseBy, _ := benchproc.NewProjectKey(".name")
+	rowBy, err := parser.Parse(*flagRow)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parsing -row: %s", err)
+		os.Exit(1)
+	}
+	unitField := rowBy.AddValues() // ".unit" is always the tidy unit
+	phaseBy, _ := parser.Parse(".name")
 
 	// XXX Take this as an argument?
-	units := make(map[*benchproc.Config]unitInfo) // unit config
-	var tidier benchunit.Tidier
-	for _, unit := range []string{"ns/op", "B/op", "live-B", "heap-B"} {
-		tidyUnit, tidyFactor := tidier.Tidy(unit)
-		cfg := cs.KeyVal(".unit", tidyUnit)
-		unitClass := benchunit.UnitClassOf(tidyUnit)
+	units := make(map[string]unitInfo) // Keyed by tidy unit
+	for _, unit := range []string{"sec/op", "B/op", "live-B", "heap-B"} {
+		unitClass := benchunit.UnitClassOf(unit)
 		var newCells func(dists []*OMap, unitClass benchunit.UnitClass) []Cell
 		switch unit {
-		case "ns/op", "B/op":
+		case "sec/op", "B/op":
 			newCells = NewStacks
 		case "live-B", "heap-B":
 			newCells = NewDeltaCells
 		}
-		units[cfg] = unitInfo{cfg, tidyUnit, tidyFactor, unitClass, newCells}
+		units[unit] = unitInfo{unitClass, newCells}
 	}
 
 	// Parse measurements into cells.
-	var measurements OMap2D // ((rowBy, unit), colBy) -> *OMap<phaseCfg -> []float64>
-	measurements.New = func(row, col *benchproc.Config) interface{} {
-		return &OMap{
-			New: func(key *benchproc.Config) interface{} {
-				return ([]float64)(nil)
-			},
-		}
+	type cellKey struct {
+		row benchproc.Config
+		col benchproc.Config
 	}
+	// TODO: The remaining uses of OMap are pretty uninteresting
+	// at this point. Can I make a Schema track the ordering and
+	// just use a regular map? Part of why that's hard is that
+	// each cell tracks its own order and I combine them using
+	// globalOrder. I'm not sure how to make Schema do something
+	// like that.
+	measurements := make(map[cellKey]*OMap) // OMap is phaseCfg -> []float64
+	rowSet := make(map[benchproc.Config]bool)
+	colSet := make(map[benchproc.Config]bool)
+
 	var reader benchfmt.Reader
 	for _, file := range flag.Args() {
 		f, err := os.Open(file)
@@ -175,6 +181,7 @@ func main() {
 				log.Print(err)
 				continue
 			}
+			benchunit.Tidy(res)
 
 			// Canonicalize "_GC" to a name key (that's
 			// how it should have been in the first
@@ -202,24 +209,35 @@ func main() {
 				}
 			}
 
-			colCfg := colBy.Project(cs, res)
-			rowCfg := rowBy.Project(cs, res)
-			phaseCfg := phaseBy.Project(cs, res)
+			colCfg, ok1 := colBy.Project(res)
+			rowCfgs, ok2 := rowBy.ProjectValues(res)
+			phaseCfg, _ := phaseBy.Project(res)
+			if !ok1 || !ok2 {
+				continue
+			}
 
-			for _, value := range res.Values {
-				unit, tidyFactor := tidier.Tidy(value.Unit)
-				unitCfg := cs.KeyVal(".unit", unit)
-				if _, ok := units[unitCfg]; !ok {
+			for i, value := range res.Values {
+				if _, ok := units[value.Unit]; !ok {
 					// Ignored unit.
 					continue
 				}
-				val := value.Value * tidyFactor
 
-				rowCfg2 := cs.Tuple(rowCfg, unitCfg)
+				key := cellKey{rowCfgs[i], colCfg}
+				rowSet[key.row] = true
+				colSet[key.col] = true
 
-				cell := measurements.LoadOrNew(rowCfg2, colCfg).(*OMap)
+				cell := measurements[key]
+				if cell == nil {
+					cell = &OMap{
+						New: func(key benchproc.Config) interface{} {
+							return ([]float64)(nil)
+						},
+					}
+					measurements[key] = cell
+				}
+
 				vals := cell.LoadOrNew(phaseCfg).([]float64)
-				cell.Store(phaseCfg, append(vals, val))
+				cell.Store(phaseCfg, append(vals, value.Value))
 			}
 		}
 		if err := reader.Err(); err != nil {
@@ -228,28 +246,33 @@ func main() {
 		f.Close()
 	}
 
-	if len(measurements.Rows) == 0 {
+	if len(measurements) == 0 {
 		log.Fatal("no data")
 	}
 
+	// Construct sorted rows and columns.
+	rows := mapKeys(rowSet).([]benchproc.Config)
+	benchproc.SortConfigs(rows)
+	cols := mapKeys(colSet).([]benchproc.Config)
+	benchproc.SortConfigs(cols)
+
 	// Transform distributions into cells by row.
-	var cells OMap2D     // ((rowBy, unit), colBy) -> Cell
-	var rowDists []*OMap // phaseCfg -> *Distribution
-	for _, rowCfg := range measurements.Rows {
-		_, unitCfg := rowCfg.PrefixLast()
-		rowDists = rowDists[:0]
-		for _, colCfg := range measurements.Cols {
-			if phases, ok := measurements.LoadOK(rowCfg, colCfg); ok {
-				dists := phases.(*OMap).Map(func(key *benchproc.Config, val interface{}) interface{} {
+	cells := make(map[cellKey]Cell)
+	for _, row := range rows {
+		var rowDists []*OMap // OMap is phaseCfg -> *Distribution
+		for _, col := range cols {
+			if phases, ok := measurements[cellKey{row, col}]; ok {
+				dists := phases.Map(func(key benchproc.Config, val interface{}) interface{} {
 					return benchstat.NewDistribution(val.([]float64), benchstat.DistributionOptions{})
 				})
 				rowDists = append(rowDists, dists)
 			}
 		}
-		rowCells := units[unitCfg].newCells(rowDists, units[unitCfg].class)
-		for _, colCfg := range measurements.Cols {
-			if _, ok := measurements.LoadOK(rowCfg, colCfg); ok {
-				cells.Store(rowCfg, colCfg, rowCells[0])
+		unit := row.Get(unitField)
+		rowCells := units[unit].newCells(rowDists, units[unit].class)
+		for _, col := range cols {
+			if _, ok := measurements[cellKey{row, col}]; ok {
+				cells[cellKey{row, col}] = rowCells[0]
 				rowCells = rowCells[1:]
 			}
 		}
@@ -266,10 +289,10 @@ func main() {
 	const rowGap = 10
 
 	// Column and row labels
-	rowTree, rowKeys := benchproc.NewConfigTree(cells.Rows)
-	colTree, colKeys := benchproc.NewConfigTree(cells.Cols)
-	cellTop := float64(len(colKeys)) * configFontHeight
-	cellLeft := float64(len(rowKeys)) * configFontHeight
+	rowHdr := benchproc.NewConfigHeader(rows)
+	colHdr := benchproc.NewConfigHeader(cols)
+	cellTop := float64(len(colBy.Fields())) * configFontHeight
+	cellLeft := float64(len(rowBy.Fields())) * configFontHeight
 	x := func(col int) (float64, float64) {
 		l := cellLeft + float64(col)*(colWidth+colSpace)
 		return l, l + colWidth
@@ -279,49 +302,35 @@ func main() {
 		return t, t + rowHeight
 	}
 
-	var walkColTree func(tree []*benchproc.ConfigTree, rowI, colI int)
-	walkColTree = func(trees []*benchproc.ConfigTree, rowI, colI int) {
-		for _, tree := range trees {
-			if tree.Config != nil {
-				l, _ := x(colI)
-				_, r := x(colI + tree.Width - 1)
-				label := tree.Config.Val()
-				fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%f" text-anchor="middle">%s</text>`+"\n", (l+r)/2, float64(rowI)*configFontHeight+configFontSize, configFontSize, label)
-				// Emit grouping bar (except at the bottom)
-				if tree.Children != nil {
-					fmt.Fprintf(svg, `  <path d="M%f %fH%f" stroke="black" stroke-width="1px" />`+"\n", l, float64(rowI+1)*configFontHeight, r)
-				}
+	for _, col := range colHdr {
+		for _, cell := range col {
+			l, _ := x(cell.Start)
+			_, r := x(cell.Start + cell.Len - 1)
+			fmt.Fprintf(svg, `  <text x="%f" y="%f" font-size="%f" text-anchor="middle">%s</text>`+"\n", (l+r)/2, float64(cell.Field)*configFontHeight+configFontSize, configFontSize, cell.Value)
+			// Emit grouping bar if this is a group
+			if cell.Len > 1 {
+				fmt.Fprintf(svg, `  <path d="M%f %fH%f" stroke="black" stroke-width="1px" />`+"\n", l, float64(cell.Field+1)*configFontHeight, r)
 			}
-			walkColTree(tree.Children, rowI+1, colI)
-			colI += tree.Width
 		}
 	}
-	walkColTree(colTree, 0, 0)
 
-	var walkRowTree func(tree []*benchproc.ConfigTree, rowI, colI int)
-	walkRowTree = func(trees []*benchproc.ConfigTree, rowI, colI int) {
-		for _, tree := range trees {
-			if tree.Config != nil {
-				t, _ := y(rowI)
-				_, b := y(rowI + tree.Width - 1)
-				label := tree.Config.Val()
-				fmt.Fprintf(svg, `  <text transform="translate(%f %f) rotate(-90)" font-size="%f" text-anchor="middle">%s</text>`+"\n", float64(colI)*configFontHeight+configFontSize, (t+b)/2, configFontSize, label)
-				// Emit grouping bar (except at the bottom)
-				if tree.Children != nil {
-					fmt.Fprintf(svg, `  <path d="M%f %fV%f" stroke="black" stroke-width="1px" />`+"\n", float64(colI+1)*configFontHeight, t, b)
-				}
+	for _, row := range rowHdr {
+		for _, cell := range row {
+			t, _ := y(cell.Start)
+			_, b := y(cell.Start + cell.Len - 1)
+			fmt.Fprintf(svg, `  <text transform="translate(%f %f) rotate(-90)" font-size="%f" text-anchor="middle">%s</text>`+"\n", float64(cell.Field)*configFontHeight+configFontSize, (t+b)/2, configFontSize, cell.Value)
+			// Emit grouping bar if this is a group
+			if cell.Len > 1 {
+				fmt.Fprintf(svg, `  <path d="M%f %fV%f" stroke="black" stroke-width="1px" />`+"\n", float64(cell.Field+1)*configFontHeight, t, b)
 			}
-			walkRowTree(tree.Children, rowI, colI+1)
-			rowI += tree.Width
 		}
 	}
-	walkRowTree(rowTree, 0, 0)
 
-	_, maxRight := x(len(cells.Cols) - 1)
-	_, maxBot := y(len(cells.Rows) - 1)
+	_, maxRight := x(len(cols) - 1)
+	_, maxBot := y(len(rows) - 1)
 
 	// Cell rows
-	for rowI, rowCfg := range cells.Rows {
+	for rowI, rowCfg := range rows {
 		top, bot := y(rowI)
 		if bot > maxBot {
 			maxBot = bot
@@ -330,9 +339,9 @@ func main() {
 		// Construct scalers for this row.
 		var ext Extents
 		var scales Scales
-		for _, colCfg := range cells.Cols {
-			cell, _ := cells.Load(rowCfg, colCfg).(Cell)
-			if cell == nil {
+		for _, colCfg := range cols {
+			cell, ok := cells[cellKey{rowCfg, colCfg}]
+			if !ok {
 				continue
 			}
 			cell.Extents(&ext)
@@ -342,18 +351,19 @@ func main() {
 		scales.Outer.Bottom = bot
 		yOut := scale.Linear{Min: top + ext.Margins.Top, Max: bot - ext.Margins.Bottom}
 		scales.Y = scale.QQ{&ext.Y, &yOut}
+		scales.PhaseField = phaseBy.Fields()[0]
 
 		// Color phases.
-		scales.Colors = make(map[*benchproc.Config]color.Color)
+		scales.Colors = make(map[benchproc.Config]color.Color)
 		assignColors(scales.Colors, &ext.TopPhases, topPal)
 		assignColors(scales.Colors, &ext.OtherPhases, otherPal)
 
 		// Render cells.
 		var prev Cell
 		var prevRight float64
-		for i, colCfg := range cells.Cols {
-			cell, _ := cells.Load(rowCfg, colCfg).(Cell)
-			if cell == nil {
+		for i, colCfg := range cols {
+			cell, ok := cells[cellKey{rowCfg, colCfg}]
+			if !ok {
 				continue
 			}
 
@@ -368,7 +378,7 @@ func main() {
 		}
 
 		// Render key.
-		keyLeft, _ := x(len(cells.Cols))
+		keyLeft, _ := x(len(cols))
 		keyRight, keyBot := prev.RenderKey(svg, keyLeft, &scales)
 		if keyRight > maxRight {
 			maxRight = keyRight
@@ -388,7 +398,17 @@ func main() {
 	)
 }
 
-func assignColors(out map[*benchproc.Config]color.Color, g *ConfigGraph, pal []color.Color) {
+func mapKeys(m interface{}) interface{} {
+	mv := reflect.ValueOf(m)
+	keys := mv.MapKeys()
+	out := reflect.MakeSlice(reflect.SliceOf(mv.Type().Key()), len(keys), len(keys))
+	for i, key := range keys {
+		out.Index(i).Set(key)
+	}
+	return out.Interface()
+}
+
+func assignColors(out map[benchproc.Config]color.Color, g *ConfigGraph, pal []color.Color) {
 	for cfg, idx := range g.Color(len(pal)) {
 		out[cfg] = pal[idx%len(pal)]
 	}

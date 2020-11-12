@@ -20,9 +20,9 @@ type DeltaCell struct {
 	row       *deltaRow
 	unitClass benchunit.UnitClass
 
-	phases []*benchproc.Config
-	info   map[*benchproc.Config]deltaInfo
-	layout map[*benchproc.Config]deltaBar
+	phases []benchproc.Config
+	info   map[benchproc.Config]deltaInfo
+	layout map[benchproc.Config]deltaBar
 
 	maxVal float64
 }
@@ -30,7 +30,7 @@ type DeltaCell struct {
 type deltaRow struct {
 	maxVal float64
 
-	phaseOrder []*benchproc.Config
+	phaseOrder []benchproc.Config
 }
 
 type deltaInfo struct {
@@ -49,7 +49,7 @@ func NewDeltaCells(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 	var maxVal float64
 	for i, phases := range dists {
 		// Compute values and deltas.
-		info := make(map[*benchproc.Config]deltaInfo)
+		info := make(map[benchproc.Config]deltaInfo)
 		var prev float64
 		var cellMax float64
 		for _, phaseCfg := range phases.Keys {
@@ -75,7 +75,7 @@ func NewDeltaCells(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 	// Find phases that have any delta large enough to be
 	// interesting.
 	thresh := maxVal * 0.05
-	keepPhases := map[*benchproc.Config]bool{}
+	keepPhases := map[benchproc.Config]bool{}
 	for _, cell := range cells {
 		cell := cell.(*DeltaCell)
 		for _, phaseCfg := range cell.phases {
@@ -85,10 +85,10 @@ func NewDeltaCells(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 		}
 	}
 	// Filter phases and accumulate phase orders.
-	var phaseOrders [][]*benchproc.Config
+	var phaseOrders [][]benchproc.Config
 	for _, cell := range cells {
 		cell := cell.(*DeltaCell)
-		var newPhases []*benchproc.Config
+		var newPhases []benchproc.Config
 		for _, phaseCfg := range cell.phases {
 			if keepPhases[phaseCfg] {
 				newPhases = append(newPhases, phaseCfg)
@@ -111,7 +111,7 @@ func (c *DeltaCell) Extents(ext *Extents) {
 	// Make room for labels.
 	ext.Margins.Bottom = 40 + labelFontHeight
 
-	var prev *benchproc.Config
+	var prev benchproc.Config
 	for _, phase := range c.phases {
 		ext.TopPhases.Add(prev, phase)
 		prev = phase
@@ -125,14 +125,14 @@ func (c *DeltaCell) Render(svg *SVG, scales *Scales, prev0 Cell, prevRight float
 	var cross []interval
 	type crossInfo struct {
 		label string
-		phase *benchproc.Config
+		phase benchproc.Config
 	}
 
 	// Compute bar layout where the top and bottom are absolute
 	// start and end, and phases are spaced out on the X axis.
 	const hMargin = 0.1
 	const negStroke = 2
-	layout := make(map[*benchproc.Config]deltaBar)
+	layout := make(map[benchproc.Config]deltaBar)
 	for i, phaseCfg := range c.phases {
 		info := c.info[phaseCfg]
 		start, end := info.start, info.end
@@ -222,7 +222,7 @@ func (c *DeltaCell) Render(svg *SVG, scales *Scales, prev0 Cell, prevRight float
 			// putting a + or -.
 			deltaLabel = "+" + deltaLabel
 		}
-		barLabel := fmt.Sprintf("%s (%s)", phaseCfg.Val(), deltaLabel)
+		barLabel := fmt.Sprintf("%s (%s)", phaseCfg.Get(scales.PhaseField), deltaLabel)
 
 		path := svgPathRect(bar.l, bar.t, bar.r, bar.b)
 		if bar.neg {
@@ -268,8 +268,8 @@ func (c *DeltaCell) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, b
 	// Emit labels.
 	inY = 0
 	for _, in := range intervals {
-		phaseCfg := in.data.(*benchproc.Config)
-		label := phaseCfg.Val()
+		phaseCfg := in.data.(benchproc.Config)
+		label := phaseCfg.Get(lastScales.PhaseField)
 		if info, ok := c.info[phaseCfg]; ok {
 			inY = mid(y.Map(info.start), y.Map(info.end))
 		} else {

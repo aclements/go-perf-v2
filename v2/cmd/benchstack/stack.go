@@ -35,17 +35,17 @@ func (p stackPhase) len() float64 {
 }
 
 type stackRow struct {
-	phaseOrder []*benchproc.Config
-	topPhases  map[*benchproc.Config]bool
+	phaseOrder []benchproc.Config
+	topPhases  map[benchproc.Config]bool
 }
 
 func NewStacks(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 	// Collect phases and create cells.
 	row := &stackRow{}
 	cells := make([]Cell, len(dists))
-	phaseMaxes := make(map[*benchproc.Config]float64)
+	phaseMaxes := make(map[benchproc.Config]float64)
 	var maxSum float64
-	var phaseOrders [][]*benchproc.Config
+	var phaseOrders [][]benchproc.Config
 	for i, phases := range dists {
 		stack := &Stack{
 			row:       row,
@@ -77,7 +77,7 @@ func NewStacks(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 	// Compute top N phases > 1%.
 	const maxTopPhases = 15
 	const minPhaseFrac = 0.01
-	var topPhases []*benchproc.Config
+	var topPhases []benchproc.Config
 	for cfg, max := range phaseMaxes {
 		if max >= maxSum*minPhaseFrac {
 			topPhases = append(topPhases, cfg)
@@ -93,7 +93,7 @@ func NewStacks(dists []*OMap, unitClass benchunit.UnitClass) []Cell {
 		topPhases = topPhases[:maxTopPhases]
 	}
 	// Put back into a map.
-	row.topPhases = make(map[*benchproc.Config]bool)
+	row.topPhases = make(map[benchproc.Config]bool)
 	for _, cfg := range topPhases {
 		row.topPhases[cfg] = true
 	}
@@ -107,13 +107,13 @@ func (s *Stack) Extents(ext *Extents) {
 	// Leave room for the "total" at the bottom.
 	ext.Margins.Bottom = labelFontHeight
 	// Add phases for phase coloring.
-	var prevTop, prevOther *benchproc.Config
+	var prevTop, prevOther benchproc.Config
 	for _, phaseCfg := range s.phases.Keys {
 		if s.row.topPhases[phaseCfg] {
 			ext.TopPhases.Add(prevTop, phaseCfg)
 			// This top phase separates "other" phases, so
 			// set prevOther to nil.
-			prevTop, prevOther = phaseCfg, nil
+			prevTop, prevOther = phaseCfg, benchproc.Config{}
 		} else {
 			ext.OtherPhases.Add(prevOther, phaseCfg)
 			prevOther = phaseCfg
@@ -126,7 +126,7 @@ func (s *Stack) Render(svg *SVG, scales *Scales, prev Cell, prevRight float64) {
 	for _, phaseCfg := range s.phases.Keys {
 		phase := s.phases.Load(phaseCfg).(stackPhase)
 		fill := svgColor(scales.Colors[phaseCfg])
-		title := phaseCfg.Val()
+		title := phaseCfg.Get(scales.PhaseField)
 
 		// Draw rectangle for this phase.
 		path := svgPathRect(x.Map(0), y.Map(phase.start), x.Map(1), y.Map(phase.end))
@@ -189,8 +189,8 @@ func (s *Stack) RenderKey(svg *SVG, x float64, lastScales *Scales) (right, bot f
 	removeIntervalOverlaps(intervals)
 	// Emit labels
 	for _, in := range intervals {
-		phaseCfg := in.data.(*benchproc.Config)
-		label := phaseCfg.Val()
+		phaseCfg := in.data.(benchproc.Config)
+		label := phaseCfg.Get(lastScales.PhaseField)
 		if phaseX, ok := s.phases.LoadOK(phaseCfg); ok {
 			phase = phaseX.(stackPhase)
 		} else {

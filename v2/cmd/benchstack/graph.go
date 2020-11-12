@@ -9,29 +9,29 @@ import (
 )
 
 type ConfigGraph struct {
-	edges map[*benchproc.Config]map[*benchproc.Config]struct{}
-	nodes []*benchproc.Config
+	edges map[benchproc.Config]map[benchproc.Config]struct{}
+	nodes []benchproc.Config
 }
 
-func (g *ConfigGraph) Add(a, b *benchproc.Config) {
+func (g *ConfigGraph) Add(a, b benchproc.Config) {
 	if g.edges == nil {
-		g.edges = make(map[*benchproc.Config]map[*benchproc.Config]struct{})
+		g.edges = make(map[benchproc.Config]map[benchproc.Config]struct{})
 	}
-	addNode := func(c *benchproc.Config) {
-		if c != nil && g.edges[c] == nil {
-			g.edges[c] = make(map[*benchproc.Config]struct{})
+	addNode := func(c benchproc.Config) {
+		if !c.IsZero() && g.edges[c] == nil {
+			g.edges[c] = make(map[benchproc.Config]struct{})
 			g.nodes = append(g.nodes, c)
 		}
 	}
 	addNode(a)
 	addNode(b)
-	if a != nil && b != nil {
+	if !a.IsZero() && !b.IsZero() {
 		g.edges[a][b] = struct{}{}
 		g.edges[b][a] = struct{}{}
 	}
 }
 
-func (g *ConfigGraph) Color(max int) map[*benchproc.Config]int {
+func (g *ConfigGraph) Color(max int) map[benchproc.Config]int {
 	// This is a greedy coloring algorithm, but with a twist: we
 	// try to use as many colors as we can by rotating the initial
 	// color selection as we visit nodes.
@@ -39,7 +39,7 @@ func (g *ConfigGraph) Color(max int) map[*benchproc.Config]int {
 	if max >= 32 {
 		panic("color count exceeds uint32 mask")
 	}
-	coloring := make(map[*benchproc.Config]int)
+	coloring := make(map[benchproc.Config]int)
 
 	// Visit nodes.
 nextNode:
