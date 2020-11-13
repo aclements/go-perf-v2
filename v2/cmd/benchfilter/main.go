@@ -8,8 +8,8 @@
 //
 // It supports the following query syntax:
 //
-// 	key:value     - Test if key equals value. Key and value can be quoted.
-// 	key:(x y ...) - Test if key equals any of x, y, etc.
+// 	key:regexp    - Test if key matches regexp. Key and value can be quoted.
+// 	key:(x y ...) - Test if key matches any of x, y, etc.
 // 	x y ...       - Test if x, y, etc. are all true
 // 	x AND y       - Same as x y
 // 	x OR y        - Test if x or y are true
@@ -19,10 +19,13 @@
 // Keys may be one of the following:
 //
 // 	.name         - The base name of a benchmark
-// 	.full         - The full name of a benchmark (including configuration)
+// 	.fullname     - The full name of a benchmark (including configuration)
 // 	.unit         - The name of a unit for a particular metric
 // 	/name-key     - Per-benchmark name configuration key
 // 	file-key      - File-level configuration key
+//
+// Regexp matching is anchored at the beginning and end, so a literal
+// string without any regexp operators must match exactly.
 //
 // For example, the query
 //
@@ -57,8 +60,8 @@ provided, it reads from stdin.
 
 It supports the following query syntax:
 
-	key:value     - Test if key equals value. Key and value can be quoted.
-	key:(x y ...) - Test if key equals any of x, y, etc.
+	key:regexp    - Test if key matches regexp. Key and value can be quoted.
+	key:(x y ...) - Test if key matches any of x, y, etc.
 	x y ...       - Test if x, y, etc. are all true
 	x AND y       - Same as x y
 	x OR y        - Test if x or y are true
@@ -68,10 +71,13 @@ It supports the following query syntax:
 Keys may be one of the following:
 
 	.name         - The base name of a benchmark
-	.full         - The full name of a benchmark (including configuration)
+	.fullname     - The full name of a benchmark (including configuration)
 	.unit         - The name of a unit for a particular metric
 	/name-key     - Per-benchmark name configuration key
 	file-key      - File-level configuration key
+
+Regexp matching is anchored at the beginning and end, so a literal
+string without any regexp operators must match exactly.
 
 For example, the query
 
