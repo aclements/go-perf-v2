@@ -168,82 +168,74 @@ func main() {
 	rowSet := make(map[benchproc.Config]bool)
 	colSet := make(map[benchproc.Config]bool)
 
-	var reader benchfmt.Reader
-	for _, file := range flag.Args() {
-		f, err := os.Open(file)
+	files := benchfmt.Files{Paths: flag.Args(), AllowStdin: true}
+	for files.Scan() {
+		res, err := files.Result()
 		if err != nil {
-			log.Fatal(err)
+			log.Print(err)
+			continue
 		}
-		reader.Reset(f, file)
-		for reader.Scan() {
-			res, err := reader.Result()
-			if err != nil {
-				log.Print(err)
+		benchunit.Tidy(res)
+
+		// Canonicalize "_GC" to a name key (that's
+		// how it should have been in the first
+		// place).
+		if strings.HasSuffix(string(res.FullName), "_GC") {
+			res.FullName = append(res.FullName[:len(res.FullName)-len("_GC")], "/kind=mem"...)
+		} else {
+			res.FullName = append(res.FullName, "/kind=cpu"...)
+		}
+
+		match := filter.Match(res)
+		if !match.Apply(res) {
+			continue
+		}
+
+		// Ignore total time benchmark.
+		if strings.HasPrefix(string(res.FullName), "TotalTime") {
+			continue
+		}
+
+		// Strip fake Loadlibfull phase from old linker.
+		if strings.HasPrefix(string(res.FullName), "Loadlibfull") {
+			if ns, ok := res.Value("ns/op"); ok && ns < 1000 {
 				continue
-			}
-			benchunit.Tidy(res)
-
-			// Canonicalize "_GC" to a name key (that's
-			// how it should have been in the first
-			// place).
-			if strings.HasSuffix(string(res.FullName), "_GC") {
-				res.FullName = append(res.FullName[:len(res.FullName)-len("_GC")], "/kind=mem"...)
-			} else {
-				res.FullName = append(res.FullName, "/kind=cpu"...)
-			}
-
-			match := filter.Match(res)
-			if !match.Apply(res) {
-				continue
-			}
-
-			// Ignore total time benchmark.
-			if strings.HasPrefix(string(res.FullName), "TotalTime") {
-				continue
-			}
-
-			// Strip fake Loadlibfull phase from old linker.
-			if strings.HasPrefix(string(res.FullName), "Loadlibfull") {
-				if ns, ok := res.Value("ns/op"); ok && ns < 1000 {
-					continue
-				}
-			}
-
-			colCfg, ok1 := colBy.Project(res)
-			rowCfgs, ok2 := rowBy.ProjectValues(res)
-			phaseCfg, _ := phaseBy.Project(res)
-			if !ok1 || !ok2 {
-				continue
-			}
-
-			for i, value := range res.Values {
-				if _, ok := units[value.Unit]; !ok {
-					// Ignored unit.
-					continue
-				}
-
-				key := cellKey{rowCfgs[i], colCfg}
-				rowSet[key.row] = true
-				colSet[key.col] = true
-
-				cell := measurements[key]
-				if cell == nil {
-					cell = &OMap{
-						New: func(key benchproc.Config) interface{} {
-							return ([]float64)(nil)
-						},
-					}
-					measurements[key] = cell
-				}
-
-				vals := cell.LoadOrNew(phaseCfg).([]float64)
-				cell.Store(phaseCfg, append(vals, value.Value))
 			}
 		}
-		if err := reader.Err(); err != nil {
-			log.Fatal(err)
+
+		colCfg, ok1 := colBy.Project(res)
+		rowCfgs, ok2 := rowBy.ProjectValues(res)
+		phaseCfg, _ := phaseBy.Project(res)
+		if !ok1 || !ok2 {
+			continue
 		}
-		f.Close()
+
+		for i, value := range res.Values {
+			if _, ok := units[value.Unit]; !ok {
+				// Ignored unit.
+				continue
+			}
+
+			key := cellKey{rowCfgs[i], colCfg}
+			rowSet[key.row] = true
+			colSet[key.col] = true
+
+			cell := measurements[key]
+			if cell == nil {
+				cell = &OMap{
+					New: func(key benchproc.Config) interface{} {
+						return ([]float64)(nil)
+					},
+				}
+				measurements[key] = cell
+			}
+
+			vals := cell.LoadOrNew(phaseCfg).([]float64)
+			cell.Store(phaseCfg, append(vals, value.Value))
+		}
+	}
+	if err := files.Err(); err != nil {
+		log.Fatal(err)
 	}
 
 	if len(measurements) == 0 {

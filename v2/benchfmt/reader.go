@@ -60,7 +60,11 @@ func NewReader(r io.Reader, fileName string) *Reader {
 
 // Reset resets the reader to begin reading from a new input. This
 // also resets all of the file-level configuration values.
-func (r *Reader) Reset(ior io.Reader, fileName string) {
+//
+// initConfig is an alternating sequence of keys and values. Reset
+// will install these as the initial file-level configuration before
+// any results are read from the input file.
+func (r *Reader) Reset(ior io.Reader, fileName string, initConfig ...string) {
 	r.s = bufio.NewScanner(ior)
 	if fileName == "" {
 		fileName = "<unknown>"
@@ -80,6 +84,14 @@ func (r *Reader) Reset(ior io.Reader, fileName string) {
 	r.result.Values = r.result.Values[:0]
 	for k := range r.result.configPos {
 		delete(r.result.configPos, k)
+	}
+
+	// Set up initial configuration.
+	if len(initConfig)%2 != 0 {
+		panic("len(initConfig) must be a multiple of 2")
+	}
+	for i := 0; i < len(initConfig); i += 2 {
+		r.result.SetFileConfig(initConfig[i], initConfig[i+1])
 	}
 }
 

@@ -21,6 +21,7 @@
 // 	.name         - The base name of a benchmark
 // 	.fullname     - The full name of a benchmark (including configuration)
 // 	.unit         - The name of a unit for a particular metric
+// 	.file         - The name of the input file
 // 	/name-key     - Per-benchmark name configuration key
 // 	file-key      - File-level configuration key
 //
@@ -73,6 +74,7 @@ Keys may be one of the following:
 	.name         - The base name of a benchmark
 	.fullname     - The full name of a benchmark (including configuration)
 	.unit         - The name of a unit for a particular metric
+	.file         - The name of the input file
 	/name-key     - Per-benchmark name configuration key
 	file-key      - File-level configuration key
 
@@ -102,73 +104,28 @@ measurements.
 		log.Fatal(err)
 	}
 
-	var reader benchfmt.Reader
 	writer := benchfmt.NewWriter(os.Stdout)
-	files := FileArgs{Args: flag.Args()[1:]}
-	for {
-		f, err := files.Next()
+	files := benchfmt.Files{Paths: flag.Args()[1:], AllowStdin: true}
+	for files.Scan() {
+		res, err := files.Result()
 		if err != nil {
-			log.Fatal(err)
+			// Non-fatal result parse error. Warn
+			// but keep going.
+			fmt.Fprintln(os.Stderr, err)
+			continue
 		}
-		if f == nil {
-			break
+
+		match := filter.Match(res)
+		if !match.Apply(res) {
+			continue
 		}
 
-		reader.Reset(f, f.Name())
-		for reader.Scan() {
-			res, err := reader.Result()
-			if err != nil {
-				// Non-fatal result parse error. Warn
-				// but keep going.
-				fmt.Fprintln(os.Stderr, err)
-				continue
-			}
-
-			match := filter.Match(res)
-			if !match.Apply(res) {
-				continue
-			}
-
-			err = writer.Write(res)
-			if err != nil {
-				log.Fatal("writing output: ", err)
-			}
-		}
-		if err := reader.Err(); err != nil {
-			log.Fatal(err)
-		}
-	}
-}
-
-type FileArgs struct {
-	Args []string
-
-	next int
-	f    *os.File
-}
-
-func (fa *FileArgs) Next() (*os.File, error) {
-	if fa.f != nil {
-		err := fa.f.Close()
-		fa.f = nil
+		err = writer.Write(res)
 		if err != nil {
-			return nil, err
+			log.Fatal("writing output: ", err)
 		}
 	}
-
-	if fa.next >= len(fa.Args) {
-		if fa.next == 0 {
-			fa.next++
-			return os.Stdin, nil
-		}
-		return nil, nil
+	if err := files.Err(); err != nil {
+		log.Fatal(err)
 	}
-
-	f, err := os.Open(fa.Args[fa.next])
-	if err != nil {
-		return nil, err
-	}
-	fa.next++
-	fa.f = f
-	return f, nil
 }
